@@ -9,21 +9,18 @@
 extern int mpi_rank, mpi_size;
 
 #define BLOCK_SIZE 32
-dim3 grid_gen(Tensor* curTensor, int bs){
-  return dim3( (curTensor->shape[0]+bs-1)/bs, (curTensor->shape[1]+bs-1)/bs );
-}
 
 
 // cuda check
-#define CHECK_CUDA(call)                                                 \
-  do {                                                                   \
-    cudaError_t status_ = call;                                          \
-    if (status_ != cudaSuccess) {                                        \
-      fprintf(stderr, "CUDA error (%s:%d): %s:%s\n", __FILE__, __LINE__, \
-              cudaGetErrorName(status_), cudaGetErrorString(status_));   \
-      exit(EXIT_FAILURE);                                                \
-    }                                                                    \
-  } while (0)
+#define CHECK_CUDA(f)                                                 \
+  {                                                                            \
+    cudaError_t err = (f);                                                     \
+    if (err != cudaSuccess) {                                                  \
+      fprintf(stderr, "CUDA error at [%s:%d] %d %s\n", __FILE__, __LINE__,     \
+              err, cudaGetErrorString(err));                                   \
+      exit(1);                                                                 \
+    }                                                                          \
+  }
 
 
 // // You can modify the data structure as you want
@@ -76,7 +73,7 @@ struct Tensor {
   void set_zero() {
     size_t n = num_elem();
     for (size_t i = 0; i < n; i++)
-      buf[i] = 0.0;
+      buf_cpu[i] = 0.0;
   }
 
   size_t num_elem() {
@@ -86,7 +83,7 @@ struct Tensor {
     return sz;
   }
 
-  void to_gpu(){
+  void cuda(){
     // allocate device memory 
     CHECK_CUDA(
       cudaMalloc(&buf_gpu, sizeof(float)*num_elem())
@@ -94,14 +91,26 @@ struct Tensor {
 
     // copy data into device memory
     CHECK_CUDA(
-      cudaMemcpy(buf_gpu, buf, sizeof(float)*num_elem(), cudaMemcpyHostToDevice)
+      cudaMemcpy(buf_gpu, buf_cpu, sizeof(float)*num_elem(), cudaMemcpyHostToDevice)
     );
-
     buf = buf_gpu; // pointer direction : gpu
+  }
+
+  void cpu(){
+    // CHECK_CUDA(
+      cudaMemcpy(
+        buf_cpu, buf_gpu, 
+        sizeof(float)*num_elem(), cudaMemcpyDeviceToHost)
+    // )
+    ;
+    buf = buf_cpu;
   }
 
 };
 
+dim3 grid_gen(Tensor* curTensor, int bs){
+  return dim3( (curTensor->shape[0]+bs-1)/bs, (curTensor->shape[1]+bs-1)/bs );
+}
 
 /* Network parameters */
 Tensor *character_embedding;
@@ -138,19 +147,43 @@ Tensor *ftmp0;
  * weight: [NUM_CHAR x EMBEDDING_DIM]
  * output: [EMBEDDING_DIM]
  */
-__global__ void embeddingKernel(Tensor* input, Tensor*weight, Tensor*output){
+__global__ 
+void embeddingKernel(
+  float* input, float*weight, float*output, 
+  const int BS, const int EMB_DIM){
+  
+  int cur_row = blockIdx.y*blockDim.y + threadIdx.y;
+  int cur_col = blockIdx.x*blockDim.x + threadIdx.x;
 
-  const int 
-
-}
-
-void embedding(Tensor *input, Tensor *weight, Tensor *output) {
-  size_t n = weight->shape[1];
-  for (size_t i = 0; i < n; i++) {
-    int x = (int)input->buf[0];
-    output->buf[i] = weight->buf[x * n + i];
+  int x = (int) input[cur_row]; // single character, 0-255
+  
+  if (cur_row < BS && cur_col < EMB_DIM){
+      output[cur_row*EMB_DIM + cur_col] = weight[x*EMB_DIM + cur_col];
   }
+}
+void embedding(Tensor *input, Tensor *weight, Tensor *output) {
+  // size_t n = weight->shape[1];
+  // for (size_t i = 0; i < n; i++) {
+  //   int x = (int)input->buf[0];
+  //   output->buf[i] = weight->buf[x * n + i];
+  // }
 
+  // output matrix : BATCH x embedding size
+  const int BS = 1;
+  const int EMB_DIM  = weight->shape[1]; // x (embedding dim -> width)
+  
+
+  // 얘네는 dimension을 x, y 순으로 준다는 점에 주의할 것 !!
+  dim3 blockDim(BLOCK_SIZE, BS); // 한 블록에 쓰레드를 [0] x [1] 개 만든다.
+  dim3 gridDim((EMB_DIM+BLOCK_SIZE-1)/BLOCK_SIZE, BS);   // 한 grid에 블록을 [0] x [1] 개 만든다.
+
+  // kernel<<block개수, thread 개수>> -> kernel<<gridDim, blockDim>>
+  // CHECK_CUDA(
+  embeddingKernel<<<gridDim, blockDim>>>(
+    input->buf, weight->buf, output->buf, BS, EMB_DIM
+  );
+  // );
+  cudaDeviceSynchronize();
 }
 
 /*
@@ -159,11 +192,32 @@ void embedding(Tensor *input, Tensor *weight, Tensor *output) {
  * input2: [*] (same shape as input1)
  * output: [*] (same shape as input1)
  */
+__global__
+void elemwiseAddKernel(
+  float* input1, float* input2, float* output,
+  int Y, int X
+  ){
+    int y = blockIdx.y*blockDim.y + threadIdx.y;
+    int x = blockIdx.x*blockDim.x + threadIdx.x;
+
+    if (y < Y && x < X){
+      output[y*X + x] = input1[y*X + x] + input2[y*X + x];
+    }
+}
 void elemwise_add(Tensor *input1, Tensor *input2, Tensor *output) {
-  size_t sn = input1->num_elem();
-  for (size_t i = 0; i < sn; i++) {
-    output->buf[i] = input1->buf[i] + input2->buf[i];
-  }
+  // size_t sn = input1->num_elem();
+  // for (size_t i = 0; i < sn; i++) {
+  //   output->buf[i] = input1->buf[i] + input2->buf[i];
+  // }
+  const int Y = output->shape[0];
+  const int X = output->shape[1];
+  
+  dim3 blockDim(BLOCK_SIZE, BLOCK_SIZE);
+  dim3 gridDim((X+BLOCK_SIZE-1)/BLOCK_SIZE, (Y+BLOCK_SIZE-1)/BLOCK_SIZE);
+  elemwiseAddKernel<<<gridDim, blockDim>>>(
+    input1->buf, input2->buf, output->buf, Y, X
+  );
+  cudaDeviceSynchronize();
 }
 
 /*
@@ -171,12 +225,34 @@ void elemwise_add(Tensor *input1, Tensor *input2, Tensor *output) {
  * input: [*]
  * output: [*] (same shape as input)
  */
+__global__ 
+void elemwiseOneminusKernel(
+  float* input, float* output,
+  int Y, int X
+){
+    int y = blockIdx.y*blockDim.y + threadIdx.y;
+    int x = blockIdx.x*blockDim.x + threadIdx.x;
+
+    if (y < Y && x < X){
+      output[y*X + x] = 1- input[y*X + x];
+    }
+}
 void elemwise_oneminus(Tensor *input, Tensor *output) {
-  size_t n = input->num_elem();
-  for (size_t i = 0; i < n; i++) {
-    float x = input->buf[i];
-    output->buf[i] = 1.0 - x;
-  }
+  // size_t n = input->num_elem();
+  // for (size_t i = 0; i < n; i++) {
+  //   float x = input->buf[i];
+  //   output->buf[i] = 1.0 - x;
+  // }
+  const int Y = output->shape[0];
+  const int X = output->shape[1];
+  
+  dim3 blockDim(BLOCK_SIZE, BLOCK_SIZE);
+  dim3 gridDim((X+BLOCK_SIZE-1)/BLOCK_SIZE, (Y+BLOCK_SIZE-1)/BLOCK_SIZE);
+  elemwiseOneminusKernel<<<gridDim, blockDim>>>(
+    input->buf, output->buf, Y, X
+  );
+  cudaDeviceSynchronize();
+
 }
 
 /*
@@ -185,11 +261,32 @@ void elemwise_oneminus(Tensor *input, Tensor *output) {
  * input2: [*] (same shape as input1)
  * output: [*] (same shape as input1)
  */
+__global__
+void elemwiseMulKernel(
+  float* input1, float* input2, float* output,
+  int Y, int X
+  ){
+    int y = blockIdx.y*blockDim.y + threadIdx.y;
+    int x = blockIdx.x*blockDim.x + threadIdx.x;
+
+    if (y < Y && x < X){
+      output[y*X + x] = input1[y*X + x]*input2[y*X + x];
+    }
+}
 void elemwise_mul(Tensor *input1, Tensor *input2, Tensor *output) {
-  size_t sn = input1->num_elem();
-  for (size_t i = 0; i < sn; i++) {
-    output->buf[i] = input1->buf[i] * input2->buf[i];
-  }
+  // size_t sn = input1->num_elem();
+  // for (size_t i = 0; i < sn; i++) {
+  //   output->buf[i] = input1->buf[i] + input2->buf[i];
+  // }
+  const int Y = output->shape[0];
+  const int X = output->shape[1];
+  
+  dim3 blockDim(BLOCK_SIZE, BLOCK_SIZE);
+  dim3 gridDim((X+BLOCK_SIZE-1)/BLOCK_SIZE, (Y+BLOCK_SIZE-1)/BLOCK_SIZE);
+  elemwiseMulKernel<<<gridDim, blockDim>>>(
+    input1->buf, input2->buf, output->buf, Y, X
+  );
+  cudaDeviceSynchronize();
 }
 
 /*
@@ -197,12 +294,34 @@ void elemwise_mul(Tensor *input1, Tensor *input2, Tensor *output) {
  * input: [*]
  * output: [*] (same shape as input)
  */
+
+__global__
+void elemwiseTanhKernel(
+  float* input, float* output,
+  int Y, int X
+  ){
+    int y = blockIdx.y*blockDim.y + threadIdx.y;
+    int x = blockIdx.x*blockDim.x + threadIdx.x;
+
+    if (y < Y && x < X){
+      output[y*X + x] = tanhf(input[y*X + x]);
+    }
+}
 void elemwise_tanh(Tensor *input, Tensor *output) {
-  size_t n = input->num_elem();
-  for (size_t i = 0; i < n; i++) {
-    float x = input->buf[i];
-    output->buf[i] = tanhf(x);
-  }
+  // size_t n = input->num_elem();
+  // for (size_t i = 0; i < n; i++) {
+  //   float x = input->buf[i];
+  //   output->buf[i] = tanhf(x);
+  // }
+  const int Y = output->shape[0];
+  const int X = output->shape[1];
+  
+  dim3 blockDim(BLOCK_SIZE, BLOCK_SIZE);
+  dim3 gridDim((X+BLOCK_SIZE-1)/BLOCK_SIZE, (Y+BLOCK_SIZE-1)/BLOCK_SIZE);
+  elemwiseTanhKernel<<<gridDim, blockDim>>>(
+    input->buf, output->buf, Y, X
+  );
+  cudaDeviceSynchronize();
 }
 
 /*
@@ -210,12 +329,33 @@ void elemwise_tanh(Tensor *input, Tensor *output) {
  * input: [*]
  * output: [*] (same shape as input)
  */
+__global__
+void elemwiseSigmoidKernel(
+  float* input, float* output,
+  int Y, int X
+  ){
+    int y = blockIdx.y*blockDim.y + threadIdx.y;
+    int x = blockIdx.x*blockDim.x + threadIdx.x;
+
+    if (y < Y && x < X){
+      output[y*X + x] = 1.0/(1.0+ expf(-input[y*X + x]));
+    }
+}
 void elemwise_sigmoid(Tensor *input, Tensor *output) {
-  size_t n = input->num_elem();
-  for (size_t i = 0; i < n; i++) {
-    float x = input->buf[i];
-    output->buf[i] = 1.0 / (1.0 + expf(-x));
-  }
+  // size_t n = input->num_elem();
+  // for (size_t i = 0; i < n; i++) {
+  //   float x = input->buf[i];
+  //   output->buf[i] = 1.0 / (1.0 + expf(-x));
+  // }
+  const int Y = output->shape[0];
+  const int X = output->shape[1];
+  
+  dim3 blockDim(BLOCK_SIZE, BLOCK_SIZE);
+  dim3 gridDim((X+BLOCK_SIZE-1)/BLOCK_SIZE, (Y+BLOCK_SIZE-1)/BLOCK_SIZE);
+  elemwiseSigmoidKernel<<<gridDim, blockDim>>>(
+    input->buf, output->buf, Y, X
+  );
+  cudaDeviceSynchronize();
 }
 
 /*
@@ -407,99 +547,99 @@ void namegen_initialize(int N, int rng_seed, char *parameter_fname) {
 
 
     // /* to device */
-    character_embedding->to_gpu();
+    // character_embedding->cuda();
 
-    // W_ir0->to_gpu();
-    // W_iz0->to_gpu();
-    // W_in0->to_gpu();
-    // W_ir1->to_gpu();
-    // W_iz1->to_gpu();
-    // W_in1->to_gpu();
+    // W_ir0->cuda();
+    // W_iz0->cuda();
+    // W_in0->cuda();
+    // W_ir1->cuda();
+    // W_iz1->cuda();
+    // W_in1->cuda();
 
-    // W_hr0->to_gpu();
-    // W_hz0->to_gpu();
-    // W_hn0->to_gpu();
-    // W_hr1->to_gpu();
-    // W_hz1->to_gpu();
-    // W_hn1->to_gpu();
+    // W_hr0->cuda();
+    // W_hz0->cuda();
+    // W_hn0->cuda();
+    // W_hr1->cuda();
+    // W_hz1->cuda();
+    // W_hn1->cuda();
 
-    // b_ir0->to_gpu();
-    // b_iz0->to_gpu();
-    // b_in0->to_gpu();
-    // b_ir1->to_gpu();
-    // b_iz1->to_gpu();
-    // b_in1->to_gpu();
+    // b_ir0->cuda();
+    // b_iz0->cuda();
+    // b_in0->cuda();
+    // b_ir1->cuda();
+    // b_iz1->cuda();
+    // b_in1->cuda();
 
-    // b_hr0->to_gpu();
-    // b_hz0->to_gpu();
-    // b_hn0->to_gpu();
-    // b_hr1->to_gpu();
-    // b_hz1->to_gpu();
-    // b_hn1->to_gpu();
+    // b_hr0->cuda();
+    // b_hz0->cuda();
+    // b_hn0->cuda();
+    // b_hr1->cuda();
+    // b_hz1->cuda();
+    // b_hn1->cuda();
 
-    // W_fc->to_gpu();
-    // b_fc->to_gpu();
+    // W_fc->cuda();
+    // b_fc->cuda();
 
     // /* input, activations, output, etc. */
-    // input->to_gpu();
-    // emb_out->to_gpu();
+    // input->cuda();
+    // emb_out->cuda();
 
-    // hidden0->to_gpu();
-    // hidden1->to_gpu();
+    // hidden0->cuda();
+    // hidden1->cuda();
 
-    // r0->to_gpu();
-    // r1->to_gpu();
-    // z0->to_gpu();
-    // z1->to_gpu();
-    // n0->to_gpu();
-    // n1->to_gpu();
-    // f->to_gpu();
+    // r0->cuda();
+    // r1->cuda();
+    // z0->cuda();
+    // z1->cuda();
+    // n0->cuda();
+    // n1->cuda();
+    // f->cuda();
 
-    // rtmp00->to_gpu();
-    // rtmp01->to_gpu();
-    // rtmp02->to_gpu();
-    // rtmp03->to_gpu();
-    // rtmp04->to_gpu();
-    // rtmp10->to_gpu();
-    // rtmp11->to_gpu();
-    // rtmp12->to_gpu();
-    // rtmp13->to_gpu();
-    // rtmp14->to_gpu();
+    // rtmp00->cuda();
+    // rtmp01->cuda();
+    // rtmp02->cuda();
+    // rtmp03->cuda();
+    // rtmp04->cuda();
+    // rtmp10->cuda();
+    // rtmp11->cuda();
+    // rtmp12->cuda();
+    // rtmp13->cuda();
+    // rtmp14->cuda();
 
-    // ztmp00->to_gpu();
-    // ztmp01->to_gpu();
-    // ztmp02->to_gpu();
-    // ztmp03->to_gpu();
-    // ztmp04->to_gpu();
-    // ztmp10->to_gpu();
-    // ztmp11->to_gpu();
-    // ztmp12->to_gpu();
-    // ztmp13->to_gpu();
-    // ztmp14->to_gpu();
+    // ztmp00->cuda();
+    // ztmp01->cuda();
+    // ztmp02->cuda();
+    // ztmp03->cuda();
+    // ztmp04->cuda();
+    // ztmp10->cuda();
+    // ztmp11->cuda();
+    // ztmp12->cuda();
+    // ztmp13->cuda();
+    // ztmp14->cuda();
 
-    // ntmp00->to_gpu();
-    // ntmp01->to_gpu();
-    // ntmp02->to_gpu();
-    // ntmp03->to_gpu();
-    // ntmp04->to_gpu();
-    // ntmp05->to_gpu();
-    // ntmp10->to_gpu();
-    // ntmp11->to_gpu();
-    // ntmp12->to_gpu();
-    // ntmp13->to_gpu();
-    // ntmp14->to_gpu();
-    // ntmp15->to_gpu();
+    // ntmp00->cuda();
+    // ntmp01->cuda();
+    // ntmp02->cuda();
+    // ntmp03->cuda();
+    // ntmp04->cuda();
+    // ntmp05->cuda();
+    // ntmp10->cuda();
+    // ntmp11->cuda();
+    // ntmp12->cuda();
+    // ntmp13->cuda();
+    // ntmp14->cuda();
+    // ntmp15->cuda();
 
-    // htmp00->to_gpu();
-    // htmp01->to_gpu();
-    // htmp02->to_gpu();
-    // htmp10->to_gpu();
-    // htmp11->to_gpu();
-    // htmp12->to_gpu();
+    // htmp00->cuda();
+    // htmp01->cuda();
+    // htmp02->cuda();
+    // htmp10->cuda();
+    // htmp11->cuda();
+    // htmp12->cuda();
 
-    // rfloats->to_gpu();
-    // ftmp0->to_gpu();
-    // char_prob->to_gpu();
+    // rfloats->cuda();
+    // ftmp0->cuda();
+    // char_prob->cuda();
 
   } 
   else {
@@ -532,28 +672,87 @@ void namegen(int N, float *random_floats, char *output) {
 
     for (int l = 0; l < MAX_LEN; l++) {
       /* Embedding */
+      input->cuda();
+      character_embedding->cuda();
+      emb_out->cuda();
       embedding(input, character_embedding, emb_out);
+      input->cpu();
+      character_embedding->cpu();
+      emb_out->cpu();
 
       /* First layer r */
       matvec(W_ir0, emb_out, rtmp00);
       matvec(W_hr0, hidden0, rtmp01);
+      b_ir0->cuda();
+      b_hr0->cuda();
+      rtmp00->cuda();
+      rtmp01->cuda();
+      rtmp02->cuda();
+      rtmp03->cuda();
+      rtmp04->cuda();
+      r0->cuda();
       elemwise_add(rtmp00, b_ir0, rtmp02);
       elemwise_add(rtmp02, rtmp01, rtmp03);
       elemwise_add(rtmp03, b_hr0, rtmp04);
       elemwise_sigmoid(rtmp04, r0);
+      b_ir0->cpu();
+      b_hr0->cpu();
+      rtmp00->cpu();
+      rtmp01->cpu();
+      rtmp02->cpu();
+      rtmp03->cpu();
+      rtmp04->cpu();
+      r0->cpu();
 
       /* First layer z */
       matvec(W_iz0, emb_out, ztmp00);
       matvec(W_hz0, hidden0, ztmp01);
+      b_iz0->cuda();
+      b_hz0->cuda();
+      ztmp00->cuda();
+      ztmp01->cuda();
+      ztmp02->cuda();
+      ztmp03->cuda();
+      ztmp04->cuda();
+      z0->cuda();
       elemwise_add(ztmp00, b_iz0, ztmp02);
       elemwise_add(ztmp02, ztmp01, ztmp03);
       elemwise_add(ztmp03, b_hz0, ztmp04);
       elemwise_sigmoid(ztmp04, z0);
+      b_iz0->cpu();
+      b_hz0->cpu();
+      ztmp00->cpu();
+      ztmp01->cpu();
+      ztmp02->cpu();
+      ztmp03->cpu();
+      ztmp04->cpu();
+      z0->cpu();
 
       /* First layer n */
       matvec(W_in0, emb_out, ntmp00);
+            
+      ntmp00->cuda();
+      b_in0->cuda();
+      ntmp01->cuda();
       elemwise_add(ntmp00, b_in0, ntmp01);
+      ntmp00->cpu(); 
+      b_in0->cpu();
+      ntmp01->cpu();
       matvec(W_hn0, hidden0, ntmp02);
+      
+      ntmp01->cuda();
+      ntmp02->cuda();
+      ntmp03->cuda();
+      ntmp04->cuda();
+      ntmp05->cuda();
+      htmp00->cuda();
+      htmp01->cuda();
+      htmp02->cuda();
+      r0->cuda();
+      n0->cuda();
+      z0->cuda();
+      hidden0->cuda();
+      b_hn0->cuda();
       elemwise_add(ntmp02, b_hn0, ntmp03);
       elemwise_mul(r0, ntmp03, ntmp04);
       elemwise_add(ntmp01, ntmp04, ntmp05);
@@ -564,27 +763,95 @@ void namegen(int N, float *random_floats, char *output) {
       elemwise_mul(htmp00, n0, htmp01);
       elemwise_mul(z0, hidden0, htmp02);
       elemwise_add(htmp01, htmp02, hidden0);
+      ntmp01->cpu();
+      ntmp02->cpu();
+      ntmp03->cpu();
+      ntmp04->cpu();
+      ntmp05->cpu();
+      htmp00->cpu();
+      htmp01->cpu();
+      htmp02->cpu();
+      r0->cpu();
+      n0->cpu();
+      z0->cpu();
+      hidden0->cpu();
+      b_hn0->cpu();
 
       /* Second layer r */
       matvec(W_ir1, hidden0, rtmp10);
       matvec(W_hr1, hidden1, rtmp11);
+
+      rtmp10->cuda();
+      rtmp11->cuda();
+      rtmp12->cuda();
+      rtmp13->cuda();
+      rtmp14->cuda();
+      b_ir1->cuda();
+      b_hr1->cuda();
+      r1->cuda();
       elemwise_add(rtmp10, b_ir1, rtmp12);
       elemwise_add(rtmp12, rtmp11, rtmp13);
       elemwise_add(rtmp13, b_hr1, rtmp14);
       elemwise_sigmoid(rtmp14, r1);
-
+      rtmp10->cpu();
+      rtmp12->cpu();
+      rtmp13->cpu();
+      rtmp14->cpu();
+      b_ir1->cpu();
+      b_hr1->cpu();
+      r1->cpu();
       /* Second layer z */
       matvec(W_iz1, hidden0, ztmp10);
       matvec(W_hz1, hidden1, ztmp11);
+
+
+      ztmp10->cuda();
+      ztmp11->cuda();
+      ztmp12->cuda();
+      ztmp13->cuda();
+      ztmp14->cuda();
+      b_iz1->cuda();
+      b_hz1->cuda();
+      z1->cuda();
       elemwise_add(ztmp10, b_iz1, ztmp12);
       elemwise_add(ztmp12, ztmp11, ztmp13);
       elemwise_add(ztmp13, b_hz1, ztmp14);
       elemwise_sigmoid(ztmp14, z1);
+      ztmp10->cpu();
+      ztmp11->cpu();
+      ztmp12->cpu();
+      ztmp13->cpu();
+      ztmp14->cpu();
+      b_iz1->cpu();
+      b_hz1->cpu();
+      z1->cpu();
 
       /* Second layer n */
       matvec(W_in1, hidden0, ntmp10);
+      ntmp10->cuda();
+      b_in1->cuda();
+      ntmp11->cuda();
       elemwise_add(ntmp10, b_in1, ntmp11);
+      ntmp10->cpu();
+      b_in1->cpu();
+      ntmp11->cpu();
       matvec(W_hn1, hidden1, ntmp12);
+      
+      ntmp11->cuda();
+      ntmp12->cuda();
+      ntmp13->cuda();
+      ntmp14->cuda();
+      ntmp15->cuda();
+      b_hn1->cuda();
+      r1->cuda();
+      n1->cuda();
+
+      htmp10->cuda();
+      htmp11->cuda();
+      htmp12->cuda();
+      n1->cuda();
+      z1->cuda();
+      hidden1->cuda();
       elemwise_add(ntmp12, b_hn1, ntmp13);
       elemwise_mul(r1, ntmp13, ntmp14);
       elemwise_add(ntmp11, ntmp14, ntmp15);
@@ -596,20 +863,46 @@ void namegen(int N, float *random_floats, char *output) {
       elemwise_mul(z1, hidden1, htmp12);
       elemwise_add(htmp11, htmp12, hidden1);
 
+      ntmp11->cpu();
+      ntmp12->cpu();
+      ntmp13->cpu();
+      ntmp14->cpu();
+      ntmp15->cpu();
+      b_hn1->cpu();
+      r1->cpu();
+      n1->cpu();
+
+      htmp10->cpu();
+      htmp11->cpu();
+      htmp12->cpu();
+      n1->cpu();
+      z1->cpu();
+      hidden1->cpu();
+    
       /* Fully connected layer */
       matvec(W_fc, hidden1, ftmp0);
-      elemwise_add(ftmp0, b_fc, f);
 
+      ftmp0->cuda();
+      b_fc->cuda();
+      f->cuda();
+      elemwise_add(ftmp0, b_fc, f);
+      ftmp0->cpu();
+      b_fc->cpu();
+      f->cpu();
       /* Softmax */
       softmax(f, char_prob);
 
       /* Random select */
       int selected_char = random_select(char_prob, rfloats, n * MAX_LEN + l);
 
+      // printf("%d : selected char\n", selected_char);
+
       output[n * (MAX_LEN + 1) + l] = selected_char;
       input->buf[0] = selected_char;
 
+      // printf("here?\n");
       if (selected_char == EOS)
+      printf("here?\n");
         break;
     }
   }

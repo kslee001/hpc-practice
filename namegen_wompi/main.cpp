@@ -84,12 +84,12 @@ int main(int argc, char **argv) {
   /* Generate names and measure time */
   // MPI_Barrier(MPI_COMM_WORLD);
   // double namegen_st = get_time();
+  
   auto namegen_st = high_resolution_clock::now();
   namegen(N, random_floats, output);
   // MPI_Barrier(MPI_COMM_WORLD);
   auto namegen_en = high_resolution_clock::now();
   // double namegen_en = get_time();
-
   if (mpi_rank == 0) {
     double elapsed_time = (double) duration_cast<microseconds>(namegen_en - namegen_st).count()/1000000;
     printf("Done!\n");
