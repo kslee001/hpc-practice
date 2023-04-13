@@ -1,0 +1,11 @@
+srun: Job 303079 step creation temporarily disabled, retrying (Requested nodes are busy)
+srun: error: Unable to create step for job 303079: Job/step already completing or completed
+srun: Job step aborted: Waiting up to 12 seconds for job step to finish.
+slurmstepd: error: *** STEP 303079.0 ON c00 CANCELLED AT 2023-04-13T22:44:58 ***
+[mpiexec@c00] HYDU_sock_write (utils/sock/sock.c:256): write error (Bad file descriptor)
+[mpiexec@c00] HYD_pmcd_pmiserv_send_signal (pm/pmiserv/pmiserv_cb.c:178): unable to write data to proxy
+[mpiexec@c00] ui_cmd_cb (pm/pmiserv/pmiserv_pmci.c:77): unable to send signal downstream
+slurmstepd: error: *** JOB 303079 ON c00 CANCELLED AT 2023-04-13T22:44:58 ***
+[mpiexec@c00] HYDT_dmxu_poll_wait_for_event (tools/demux/demux_poll.c:77): callback returned error status
+[mpiexec@c00] HYD_pmci_wait_for_completion (pm/pmiserv/pmiserv_pmci.c:196): error waiting for event
+[mpiexec@c00] main (ui/mpich/mpiexec.c:336): process manager error waiting for completion
