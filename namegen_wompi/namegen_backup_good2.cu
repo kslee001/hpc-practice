@@ -451,14 +451,14 @@ void matmul(Tensor *input1, Tensor *input2, Tensor *output) {
  * output: [*], (same shape as input)
  */
 __global__
-void softmaxKernel(float* input, float* output, const int N) {
-  __shared__ float sdata[BLOCK_SIZE];
+void softmax(float* input, float* output, const int n) {
+  __shared__ float sdata[THREADS_PER_BLOCK];
   int tid = threadIdx.x;
   int i = blockIdx.x * blockDim.x + threadIdx.x;
 
   // Calculate the sum of exponentials in the block
   float sum = 0.0f;
-  while (i < N) {
+  while (i < n) {
     float x = input[i];
     sum += expf(x);
     i += blockDim.x * gridDim.x;
@@ -476,22 +476,15 @@ void softmaxKernel(float* input, float* output, const int N) {
 
   // Calculate the output probabilities
   i = blockIdx.x * blockDim.x + threadIdx.x;
-  while (i < N) {
+  while (i < n) {
     float x = input[i];
     output[i] = expf(x) / sdata[0];
     i += blockDim.x * gridDim.x;
   }
 }
 void softmaxDevice(Tensor *input, Tensor* output){
-  size_t N = input->num_elem();
-
-  dim3 blockDim(BLOCK_SIZE, BS);
-  dim3 gridDim((N+BLOCK_SIZE-1)/BLOCK_SIZE, BS);
+  size_t n = input->num_elem();
   
-  softmaxKernel<<<gridDim, blockDim>>>(
-    input->buf, output->buf, N
-  );
-  cudaDeviceSynchronize();
 }
 void softmax(Tensor *input, Tensor *output) {
   size_t n = input->num_elem();
@@ -540,188 +533,195 @@ void namegen_initialize(int N, int rng_seed, char *parameter_fname) {
 
     /* Network parameters */
     character_embedding =
-        new Tensor({BS, NUM_CHAR, EMBEDDING_DIM}, parameter + OFFSET0);
+        new Tensor({NUM_CHAR, EMBEDDING_DIM}, parameter + OFFSET0);
 
-    W_ir0 = new Tensor({BS, HIDDEN_DIM, EMBEDDING_DIM}, parameter + OFFSET1);
-    W_iz0 = new Tensor({BS, HIDDEN_DIM, EMBEDDING_DIM}, parameter + OFFSET2);
-    W_in0 = new Tensor({BS, HIDDEN_DIM, EMBEDDING_DIM}, parameter + OFFSET3);
-    W_ir1 = new Tensor({BS, HIDDEN_DIM, HIDDEN_DIM}, parameter + OFFSET4);
-    W_iz1 = new Tensor({BS, HIDDEN_DIM, HIDDEN_DIM}, parameter + OFFSET5);
-    W_in1 = new Tensor({BS, HIDDEN_DIM, HIDDEN_DIM}, parameter + OFFSET6);
+    W_ir0 = new Tensor({HIDDEN_DIM, EMBEDDING_DIM}, parameter + OFFSET1);
+    W_iz0 = new Tensor({HIDDEN_DIM, EMBEDDING_DIM}, parameter + OFFSET2);
+    W_in0 = new Tensor({HIDDEN_DIM, EMBEDDING_DIM}, parameter + OFFSET3);
+    W_ir1 = new Tensor({HIDDEN_DIM, HIDDEN_DIM}, parameter + OFFSET4);
+    W_iz1 = new Tensor({HIDDEN_DIM, HIDDEN_DIM}, parameter + OFFSET5);
+    W_in1 = new Tensor({HIDDEN_DIM, HIDDEN_DIM}, parameter + OFFSET6);
 
-    W_hr0 = new Tensor({BS, HIDDEN_DIM, HIDDEN_DIM}, parameter + OFFSET7);
-    W_hz0 = new Tensor({BS, HIDDEN_DIM, HIDDEN_DIM}, parameter + OFFSET8);
-    W_hn0 = new Tensor({BS, HIDDEN_DIM, HIDDEN_DIM}, parameter + OFFSET9);
-    W_hr1 = new Tensor({BS, HIDDEN_DIM, HIDDEN_DIM}, parameter + OFFSET10);
-    W_hz1 = new Tensor({BS, HIDDEN_DIM, HIDDEN_DIM}, parameter + OFFSET11);
-    W_hn1 = new Tensor({BS, HIDDEN_DIM, HIDDEN_DIM}, parameter + OFFSET12);
+    W_hr0 = new Tensor({HIDDEN_DIM, HIDDEN_DIM}, parameter + OFFSET7);
+    W_hz0 = new Tensor({HIDDEN_DIM, HIDDEN_DIM}, parameter + OFFSET8);
+    W_hn0 = new Tensor({HIDDEN_DIM, HIDDEN_DIM}, parameter + OFFSET9);
+    W_hr1 = new Tensor({HIDDEN_DIM, HIDDEN_DIM}, parameter + OFFSET10);
+    W_hz1 = new Tensor({HIDDEN_DIM, HIDDEN_DIM}, parameter + OFFSET11);
+    W_hn1 = new Tensor({HIDDEN_DIM, HIDDEN_DIM}, parameter + OFFSET12);
 
-    b_ir0 = new Tensor({BS, HIDDEN_DIM}, parameter + OFFSET13);
-    b_iz0 = new Tensor({BS, HIDDEN_DIM}, parameter + OFFSET14);
-    b_in0 = new Tensor({BS, HIDDEN_DIM}, parameter + OFFSET15);
-    b_ir1 = new Tensor({BS, HIDDEN_DIM}, parameter + OFFSET16);
-    b_iz1 = new Tensor({BS, HIDDEN_DIM}, parameter + OFFSET17);
-    b_in1 = new Tensor({BS, HIDDEN_DIM}, parameter + OFFSET18);
+    b_ir0 = new Tensor({HIDDEN_DIM}, parameter + OFFSET13);
+    b_iz0 = new Tensor({HIDDEN_DIM}, parameter + OFFSET14);
+    b_in0 = new Tensor({HIDDEN_DIM}, parameter + OFFSET15);
+    b_ir1 = new Tensor({HIDDEN_DIM}, parameter + OFFSET16);
+    b_iz1 = new Tensor({HIDDEN_DIM}, parameter + OFFSET17);
+    b_in1 = new Tensor({HIDDEN_DIM}, parameter + OFFSET18);
 
-    b_hr0 = new Tensor({BS, HIDDEN_DIM}, parameter + OFFSET19);
-    b_hz0 = new Tensor({BS, HIDDEN_DIM}, parameter + OFFSET20);
-    b_hn0 = new Tensor({BS, HIDDEN_DIM}, parameter + OFFSET21);
-    b_hr1 = new Tensor({BS, HIDDEN_DIM}, parameter + OFFSET22);
-    b_hz1 = new Tensor({BS, HIDDEN_DIM}, parameter + OFFSET23);
-    b_hn1 = new Tensor({BS, HIDDEN_DIM}, parameter + OFFSET24);
+    b_hr0 = new Tensor({HIDDEN_DIM}, parameter + OFFSET19);
+    b_hz0 = new Tensor({HIDDEN_DIM}, parameter + OFFSET20);
+    b_hn0 = new Tensor({HIDDEN_DIM}, parameter + OFFSET21);
+    b_hr1 = new Tensor({HIDDEN_DIM}, parameter + OFFSET22);
+    b_hz1 = new Tensor({HIDDEN_DIM}, parameter + OFFSET23);
+    b_hn1 = new Tensor({HIDDEN_DIM}, parameter + OFFSET24);
 
-    W_fc = new Tensor({BS, NUM_CHAR, HIDDEN_DIM}, parameter + OFFSET25);
-    b_fc = new Tensor({BS, NUM_CHAR}, parameter + OFFSET26);
+    W_fc = new Tensor({NUM_CHAR, HIDDEN_DIM}, parameter + OFFSET25);
+    b_fc = new Tensor({NUM_CHAR}, parameter + OFFSET26);
 
     /* input, activations, output, etc. */
-    input = new Tensor({BS, 1});
-    emb_out = new Tensor({BS, EMBEDDING_DIM});
+    input = new Tensor({1});
+    emb_out = new Tensor({EMBEDDING_DIM});
 
-    hidden0 = new Tensor({BS, HIDDEN_DIM});
-    hidden1 = new Tensor({BS, HIDDEN_DIM});
+    hidden0 = new Tensor({HIDDEN_DIM});
+    hidden1 = new Tensor({HIDDEN_DIM});
 
-    r0 = new Tensor({BS, HIDDEN_DIM});
-    r1 = new Tensor({BS, HIDDEN_DIM});
-    z0 = new Tensor({BS, HIDDEN_DIM});
-    z1 = new Tensor({BS, HIDDEN_DIM});
-    n0 = new Tensor({BS, HIDDEN_DIM});
-    n1 = new Tensor({BS, HIDDEN_DIM});
-    f = new Tensor({BS, NUM_CHAR});
+    r0 = new Tensor({HIDDEN_DIM});
+    r1 = new Tensor({HIDDEN_DIM});
+    z0 = new Tensor({HIDDEN_DIM});
+    z1 = new Tensor({HIDDEN_DIM});
+    n0 = new Tensor({HIDDEN_DIM});
+    n1 = new Tensor({HIDDEN_DIM});
+    f = new Tensor({NUM_CHAR});
 
-    rtmp00 = new Tensor({BS, HIDDEN_DIM});
-    rtmp01 = new Tensor({BS, HIDDEN_DIM});
-    rtmp02 = new Tensor({BS, HIDDEN_DIM});
-    rtmp03 = new Tensor({BS, HIDDEN_DIM});
-    rtmp04 = new Tensor({BS, HIDDEN_DIM});
-    rtmp10 = new Tensor({BS, HIDDEN_DIM});
-    rtmp11 = new Tensor({BS, HIDDEN_DIM});
-    rtmp12 = new Tensor({BS, HIDDEN_DIM});
-    rtmp13 = new Tensor({BS, HIDDEN_DIM});
-    rtmp14 = new Tensor({BS, HIDDEN_DIM});
+    rtmp00 = new Tensor({HIDDEN_DIM});
+    rtmp01 = new Tensor({HIDDEN_DIM});
+    rtmp02 = new Tensor({HIDDEN_DIM});
+    rtmp03 = new Tensor({HIDDEN_DIM});
+    rtmp04 = new Tensor({HIDDEN_DIM});
+    rtmp10 = new Tensor({HIDDEN_DIM});
+    rtmp11 = new Tensor({HIDDEN_DIM});
+    rtmp12 = new Tensor({HIDDEN_DIM});
+    rtmp13 = new Tensor({HIDDEN_DIM});
+    rtmp14 = new Tensor({HIDDEN_DIM});
 
-    ztmp00 = new Tensor({BS, HIDDEN_DIM});
-    ztmp01 = new Tensor({BS, HIDDEN_DIM});
-    ztmp02 = new Tensor({BS, HIDDEN_DIM});
-    ztmp03 = new Tensor({BS, HIDDEN_DIM});
-    ztmp04 = new Tensor({BS, HIDDEN_DIM});
-    ztmp10 = new Tensor({BS, HIDDEN_DIM});
-    ztmp11 = new Tensor({BS, HIDDEN_DIM});
-    ztmp12 = new Tensor({BS, HIDDEN_DIM});
-    ztmp13 = new Tensor({BS, HIDDEN_DIM});
-    ztmp14 = new Tensor({BS, HIDDEN_DIM});
+    ztmp00 = new Tensor({HIDDEN_DIM});
+    ztmp01 = new Tensor({HIDDEN_DIM});
+    ztmp02 = new Tensor({HIDDEN_DIM});
+    ztmp03 = new Tensor({HIDDEN_DIM});
+    ztmp04 = new Tensor({HIDDEN_DIM});
+    ztmp10 = new Tensor({HIDDEN_DIM});
+    ztmp11 = new Tensor({HIDDEN_DIM});
+    ztmp12 = new Tensor({HIDDEN_DIM});
+    ztmp13 = new Tensor({HIDDEN_DIM});
+    ztmp14 = new Tensor({HIDDEN_DIM});
 
-    ntmp00 = new Tensor({BS, HIDDEN_DIM});
-    ntmp01 = new Tensor({BS, HIDDEN_DIM});
-    ntmp02 = new Tensor({BS, HIDDEN_DIM});
-    ntmp03 = new Tensor({BS, HIDDEN_DIM});
-    ntmp04 = new Tensor({BS, HIDDEN_DIM});
-    ntmp05 = new Tensor({BS, HIDDEN_DIM});
-    ntmp10 = new Tensor({BS, HIDDEN_DIM});
-    ntmp11 = new Tensor({BS, HIDDEN_DIM});
-    ntmp12 = new Tensor({BS, HIDDEN_DIM});
-    ntmp13 = new Tensor({BS, HIDDEN_DIM});
-    ntmp14 = new Tensor({BS, HIDDEN_DIM});
-    ntmp15 = new Tensor({BS, HIDDEN_DIM});
+    ntmp00 = new Tensor({HIDDEN_DIM});
+    ntmp01 = new Tensor({HIDDEN_DIM});
+    ntmp02 = new Tensor({HIDDEN_DIM});
+    ntmp03 = new Tensor({HIDDEN_DIM});
+    ntmp04 = new Tensor({HIDDEN_DIM});
+    ntmp05 = new Tensor({HIDDEN_DIM});
+    ntmp10 = new Tensor({HIDDEN_DIM});
+    ntmp11 = new Tensor({HIDDEN_DIM});
+    ntmp12 = new Tensor({HIDDEN_DIM});
+    ntmp13 = new Tensor({HIDDEN_DIM});
+    ntmp14 = new Tensor({HIDDEN_DIM});
+    ntmp15 = new Tensor({HIDDEN_DIM});
 
-    htmp00 = new Tensor({BS, HIDDEN_DIM});
-    htmp01 = new Tensor({BS, HIDDEN_DIM});
-    htmp02 = new Tensor({BS, HIDDEN_DIM});
-    htmp10 = new Tensor({BS, HIDDEN_DIM});
-    htmp11 = new Tensor({BS, HIDDEN_DIM});
-    htmp12 = new Tensor({BS, HIDDEN_DIM});
+    htmp00 = new Tensor({HIDDEN_DIM});
+    htmp01 = new Tensor({HIDDEN_DIM});
+    htmp02 = new Tensor({HIDDEN_DIM});
+    htmp10 = new Tensor({HIDDEN_DIM});
+    htmp11 = new Tensor({HIDDEN_DIM});
+    htmp12 = new Tensor({HIDDEN_DIM});
 
-    rfloats = new Tensor({BS, N * MAX_LEN});
-    ftmp0 = new Tensor({BS, NUM_CHAR});
-    char_prob = new Tensor({BS, NUM_CHAR});
+    rfloats = new Tensor({N * MAX_LEN});
+    ftmp0 = new Tensor({NUM_CHAR});
+    char_prob = new Tensor({NUM_CHAR});
+
 
     /* to device */
-    character_embedding->gpu();
+    // character_embedding->gpu();
 
-    W_ir0->gpu();
-    W_iz0->gpu();
-    W_in0->gpu();
-    W_ir1->gpu();
-    W_iz1->gpu();
-    W_in1->gpu();
+    // W_ir0->gpu();
+    // W_iz0->gpu();
+    // W_in0->gpu();
+    // W_ir1->gpu();
+    // W_iz1->gpu();
+    // W_in1->gpu();
 
-    W_hr0->gpu();
-    W_hz0->gpu();
-    W_hn0->gpu();
-    W_hr1->gpu();
-    W_hz1->gpu();
-    W_hn1->gpu();
+    // W_hr0->gpu();
+    // W_hz0->gpu();
+    // W_hn0->gpu();
+    // W_hr1->gpu();
+    // W_hz1->gpu();
+    // W_hn1->gpu();
 
-    b_ir0->gpu();
-    b_iz0->gpu();
-    b_in0->gpu();
-    b_ir1->gpu();
-    b_iz1->gpu();
-    b_in1->gpu();
+    // b_ir0->gpu();
+    // b_iz0->gpu();
+    // b_in0->gpu();
+    // b_ir1->gpu();
+    // b_iz1->gpu();
+    // b_in1->gpu();
 
-    b_hr0->gpu();
-    b_hz0->gpu();
-    b_hn0->gpu();
-    b_hr1->gpu();
-    b_hz1->gpu();
-    b_hn1->gpu();
+    // b_hr0->gpu();
+    // b_hz0->gpu();
+    // b_hn0->gpu();
+    // b_hr1->gpu();
+    // b_hz1->gpu();
+    // b_hn1->gpu();
 
-    W_fc->gpu();
-    b_fc->gpu();
+    // W_fc->gpu();
+    // b_fc->gpu();
 
-    /* input, activations, output, etc. */
+    // /* input, activations, output, etc. */
+    // input->gpu();
+    // emb_out->gpu();
 
+    // hidden0->gpu();
+    // hidden1->gpu();
 
-    r0->gpu();
-    r1->gpu();
-    z0->gpu();
-    z1->gpu();
-    n0->gpu();
-    n1->gpu();
-    f->gpu();
+    // r0->gpu();
+    // r1->gpu();
+    // z0->gpu();
+    // z1->gpu();
+    // n0->gpu();
+    // n1->gpu();
+    // f->gpu();
 
-    rtmp00->gpu();
-    rtmp01->gpu();
-    rtmp02->gpu();
-    rtmp03->gpu();
-    rtmp04->gpu();
-    rtmp10->gpu();
-    rtmp11->gpu();
-    rtmp12->gpu();
-    rtmp13->gpu();
-    rtmp14->gpu();
+    // rtmp00->gpu();
+    // rtmp01->gpu();
+    // rtmp02->gpu();
+    // rtmp03->gpu();
+    // rtmp04->gpu();
+    // rtmp10->gpu();
+    // rtmp11->gpu();
+    // rtmp12->gpu();
+    // rtmp13->gpu();
+    // rtmp14->gpu();
 
-    ztmp00->gpu();
-    ztmp01->gpu();
-    ztmp02->gpu();
-    ztmp03->gpu();
-    ztmp04->gpu();
-    ztmp10->gpu();
-    ztmp11->gpu();
-    ztmp12->gpu();
-    ztmp13->gpu();
-    ztmp14->gpu();
+    // ztmp00->gpu();
+    // ztmp01->gpu();
+    // ztmp02->gpu();
+    // ztmp03->gpu();
+    // ztmp04->gpu();
+    // ztmp10->gpu();
+    // ztmp11->gpu();
+    // ztmp12->gpu();
+    // ztmp13->gpu();
+    // ztmp14->gpu();
 
-    ntmp00->gpu();
-    ntmp01->gpu();
-    ntmp02->gpu();
-    ntmp03->gpu();
-    ntmp04->gpu();
-    ntmp05->gpu();
-    ntmp10->gpu();
-    ntmp11->gpu();
-    ntmp12->gpu();
-    ntmp13->gpu();
-    ntmp14->gpu();
-    ntmp15->gpu();
+    // ntmp00->gpu();
+    // ntmp01->gpu();
+    // ntmp02->gpu();
+    // ntmp03->gpu();
+    // ntmp04->gpu();
+    // ntmp05->gpu();
+    // ntmp10->gpu();
+    // ntmp11->gpu();
+    // ntmp12->gpu();
+    // ntmp13->gpu();
+    // ntmp14->gpu();
+    // ntmp15->gpu();
 
-    htmp00->gpu();
-    htmp01->gpu();
-    htmp02->gpu();
-    htmp10->gpu();
-    htmp11->gpu();
-    htmp12->gpu();
+    // htmp00->gpu();
+    // htmp01->gpu();
+    // htmp02->gpu();
+    // htmp10->gpu();
+    // htmp11->gpu();
+    // htmp12->gpu();
 
-    ftmp0->gpu();
+    // rfloats->gpu();
+    // ftmp0->gpu();
+    // char_prob->gpu();
 
   } 
   else {
@@ -746,102 +746,99 @@ void namegen(int N, float *random_floats, char *output) {
 
   /* Generate N names */
   for (int n = 0; n < N; n++) {
-    input->buf[n] = SOS;
-  }
-  input->gpu();
+    /* Initialize input and hidden vector. */
+    /* One hidden vector for each GRU layer */
+    input->buf[0] = SOS;
+    hidden0->set_zero();
+    hidden1->set_zero();
 
-  hidden0->set_zero();
-  hidden1->set_zero();
-  hidden0->gpu();
-  hidden1->gpu();
+    for (int l = 0; l < MAX_LEN; l++) {
+      /* Embedding */
 
-  for (int l = 0; l < MAX_LEN; l++) {
-    /* Embedding */
-    embeddingDevice(input, character_embedding, emb_out);
-    
-    matmulDevice(W_ir0, emb_out, rtmp00);
-    matmulDevice(W_hr0, hidden0, rtmp01);
+      embeddingDevice(input, character_embedding, emb_out);
 
-    elemwiseAddDevice(rtmp00, b_ir0, rtmp02);
-    elemwiseAddDevice(rtmp02, rtmp01, rtmp03);
-    elemwiseAddDevice(rtmp03, b_hr0, rtmp04);
-    elemwiseSigmoidDevice(rtmp04, r0);
+      matmulDevice(W_ir0, emb_out, rtmp00);
+      matmulDevice(W_hr0, hidden0, rtmp01);
 
-    /* First layer z */
-    matmulDevice(W_iz0, emb_out, ztmp00);
-    matmulDevice(W_hz0, hidden0, ztmp01);
-    elemwiseAddDevice(ztmp00, b_iz0, ztmp02);
-    elemwiseAddDevice(ztmp02, ztmp01, ztmp03);
-    elemwiseAddDevice(ztmp03, b_hz0, ztmp04);
-    elemwiseSigmoidDevice(ztmp04, z0);
+      elemwiseAddDevice(rtmp00, b_ir0, rtmp02);
+      elemwiseAddDevice(rtmp02, rtmp01, rtmp03);
+      elemwiseAddDevice(rtmp03, b_hr0, rtmp04);
+      elemwiseSigmoidDevice(rtmp04, r0);
 
-    /* First layer n */
-    matmulDevice(W_in0, emb_out, ntmp00);
-    elemwiseAddDevice(ntmp00, b_in0, ntmp01);
-    matmulDevice(W_hn0, hidden0, ntmp02);
+      /* First layer z */
+      matmulDevice(W_iz0, emb_out, ztmp00);
+      matmulDevice(W_hz0, hidden0, ztmp01);
+      elemwiseAddDevice(ztmp00, b_iz0, ztmp02);
+      elemwiseAddDevice(ztmp02, ztmp01, ztmp03);
+      elemwiseAddDevice(ztmp03, b_hz0, ztmp04);
+      elemwiseSigmoidDevice(ztmp04, z0);
 
-    elemwiseAddDevice(ntmp02, b_hn0, ntmp03);
-    elemwiseMulDevice(r0, ntmp03, ntmp04);
-    elemwiseAddDevice(ntmp01, ntmp04, ntmp05);
-    elemwiseTanhDevice(ntmp05, n0);
+      /* First layer n */
+      matmulDevice(W_in0, emb_out, ntmp00);
+      elemwiseAddDevice(ntmp00, b_in0, ntmp01);
+      matmulDevice(W_hn0, hidden0, ntmp02);
 
-    /* First layer h (hidden) */
-    elemwiseOneminusDevice(z0, htmp00);
-    elemwiseMulDevice(htmp00, n0, htmp01);
-    elemwiseMulDevice(z0, hidden0, htmp02);
-    elemwiseAddDevice(htmp01, htmp02, hidden0);
+      elemwiseAddDevice(ntmp02, b_hn0, ntmp03);
+      elemwiseMulDevice(r0, ntmp03, ntmp04);
+      elemwiseAddDevice(ntmp01, ntmp04, ntmp05);
+      elemwiseTanhDevice(ntmp05, n0);
 
-    /* Second layer r */
-    matmulDevice(W_ir1, hidden0, rtmp10);
-    matmulDevice(W_hr1, hidden1, rtmp11);
+      /* First layer h (hidden) */
+      elemwiseOneminusDevice(z0, htmp00);
+      elemwiseMulDevice(htmp00, n0, htmp01);
+      elemwiseMulDevice(z0, hidden0, htmp02);
+      elemwiseAddDevice(htmp01, htmp02, hidden0);
 
-    elemwiseAddDevice(rtmp10, b_ir1, rtmp12);
-    elemwiseAddDevice(rtmp12, rtmp11, rtmp13);
-    elemwiseAddDevice(rtmp13, b_hr1, rtmp14);
-    elemwiseSigmoidDevice(rtmp14, r1);
+      /* Second layer r */
+      matmulDevice(W_ir1, hidden0, rtmp10);
+      matmulDevice(W_hr1, hidden1, rtmp11);
 
-    /* Second layer z */
-    matmulDevice(W_iz1, hidden0, ztmp10);
-    matmulDevice(W_hz1, hidden1, ztmp11);
-    elemwiseAddDevice(ztmp10, b_iz1, ztmp12);
-    elemwiseAddDevice(ztmp12, ztmp11, ztmp13);
-    elemwiseAddDevice(ztmp13, b_hz1, ztmp14);
-    elemwiseSigmoidDevice(ztmp14, z1);
+      elemwiseAddDevice(rtmp10, b_ir1, rtmp12);
+      elemwiseAddDevice(rtmp12, rtmp11, rtmp13);
+      elemwiseAddDevice(rtmp13, b_hr1, rtmp14);
+      elemwiseSigmoidDevice(rtmp14, r1);
 
-    /* Second layer n */
-    matmulDevice(W_in1, hidden0, ntmp10);
-    elemwiseAddDevice(ntmp10, b_in1, ntmp11);
-    matmulDevice(W_hn1, hidden1, ntmp12);
-    elemwiseAddDevice(ntmp12, b_hn1, ntmp13);
-    elemwiseMulDevice(r1, ntmp13, ntmp14);
-    elemwiseAddDevice(ntmp11, ntmp14, ntmp15);
-    elemwiseTanhDevice(ntmp15, n1);
+      /* Second layer z */
+      matmulDevice(W_iz1, hidden0, ztmp10);
+      matmulDevice(W_hz1, hidden1, ztmp11);
+      elemwiseAddDevice(ztmp10, b_iz1, ztmp12);
+      elemwiseAddDevice(ztmp12, ztmp11, ztmp13);
+      elemwiseAddDevice(ztmp13, b_hz1, ztmp14);
+      elemwiseSigmoidDevice(ztmp14, z1);
 
-    /* Second layer h (hidden) */
-    elemwiseOneminusDevice(z1, htmp10);
-    elemwiseMulDevice(htmp10, n1, htmp11);
-    elemwiseMulDevice(z1, hidden1, htmp12);
-    elemwiseAddDevice(htmp11, htmp12, hidden1);
+      /* Second layer n */
+      matmulDevice(W_in1, hidden0, ntmp10);
+      elemwiseAddDevice(ntmp10, b_in1, ntmp11);
+      matmulDevice(W_hn1, hidden1, ntmp12);
+      elemwiseAddDevice(ntmp12, b_hn1, ntmp13);
+      elemwiseMulDevice(r1, ntmp13, ntmp14);
+      elemwiseAddDevice(ntmp11, ntmp14, ntmp15);
+      elemwiseTanhDevice(ntmp15, n1);
 
-    /* Fully connected layer */
-    matmulDevice(W_fc, hidden1, ftmp0);
-    elemwiseAddDevice(ftmp0, b_fc, f);
+      /* Second layer h (hidden) */
+      elemwiseOneminusDevice(z1, htmp10);
+      elemwiseMulDevice(htmp10, n1, htmp11);
+      elemwiseMulDevice(z1, hidden1, htmp12);
+      elemwiseAddDevice(htmp11, htmp12, hidden1);
 
-    /* Softmax */
-    softmaxDevice(f, char_prob);
+      /* Fully connected layer */
+      matmulDevice(W_fc, hidden1, ftmp0);
+      elemwiseAddDevice(ftmp0, b_fc, f);
 
-    /* Random select */
-    int selected_char = random_select(char_prob, rfloats, n * MAX_LEN + l);
-    output[n * (MAX_LEN + 1) + l] = selected_char;
+      /* Softmax */
+      softmax(f, char_prob);
 
-    input->cpu();
-    input->buf[0] = selected_char;
+      /* Random select */
+      int selected_char = random_select(char_prob, rfloats, n * MAX_LEN + l);
 
-    if (selected_char == EOS)
-      break;
+      output[n * (MAX_LEN + 1) + l] = selected_char;
+      input->buf[0] = selected_char;
+
+      if (selected_char == EOS)
+        break;
+    }
   }
 }
-
 
 /*
  * Finalize the model.
