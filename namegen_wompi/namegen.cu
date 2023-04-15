@@ -179,7 +179,7 @@ void embeddingDevice(Tensor *input, Tensor *weight, Tensor *output) {
   cudaDeviceSynchronize();
 }
 void embedding(Tensor *input, Tensor *weight, Tensor *output) {
-  size_t n = weight->shape[1];
+  size_t n = weight->shape[2];
   for (size_t i = 0; i < n; i++) {
     int x = (int)input->buf[0];
     output->buf[i] = weight->buf[x * n + i];
@@ -369,8 +369,9 @@ void elemwise_sigmoid(Tensor *input, Tensor *output) {
 
 // }
 void matvec(Tensor *input1, Tensor *input2, Tensor *output) {
-  size_t N_ = input1->shape[0];
-  size_t K_ = input1->shape[1];
+  size_t N_ = input1->shape[1];
+  size_t K_ = input1->shape[2];
+  // printf("%d, %d \n", N_, K_);
   for (size_t i = 0; i < N_; i++) {
     float c = 0.0;
     for (size_t j = 0; j < K_; j++) {
@@ -417,11 +418,12 @@ __global__ void matmulKernel(float *A, float *B, float *C, int M, int N, int K) 
   }
 }
 void matmulDevice(Tensor *input1, Tensor *input2, Tensor *output){
-  const int M = output->shape[0];
-  const int N = output->shape[1];
-  const int K = input1->shape[1];
-  dim3 blockDim(BLOCK_SIZE/WPT, BLOCK_SIZE, 1);
-  dim3 gridDim((N+BLOCK_SIZE-1)/BLOCK_SIZE, 1);
+  const int M = output->shape[1];
+  const int N = output->shape[2];
+  const int K = input1->shape[2];
+  dim3 blockDim( BLOCK_SIZE, BLOCK_SIZE, BS );
+  dim3 gridDim( (N+BLOCK_SIZE-1)/BLOCK_SIZE + 1, ( M+BLOCK_SIZE-1)/BLOCK_SIZE, BS );
+
   matmulKernel<<<gridDim, blockDim>>>(
     input1->buf, input2->buf, output->buf, M, N, K
   );
@@ -429,9 +431,10 @@ void matmulDevice(Tensor *input1, Tensor *input2, Tensor *output){
 }
 
 void matmul(Tensor *input1, Tensor *input2, Tensor *output) {
-  size_t M_ = input1->shape[0];
-  size_t K_ = input1->shape[1];
-  size_t N_ = input2->shape[1];
+  size_t M_ = input1->shape[1];
+  size_t K_ = input1->shape[2];
+  size_t N_ = input2->shape[2];
+
   for (size_t i = 0; i < M_; i++) {
     for (size_t j = 0; j < N_; j++) {
       float c = 0.0;
@@ -635,93 +638,93 @@ void namegen_initialize(int N, int rng_seed, char *parameter_fname) {
     char_prob = new Tensor({BS, NUM_CHAR});
 
     /* to device */
-    character_embedding->gpu();
+    // character_embedding->gpu();
 
-    W_ir0->gpu();
-    W_iz0->gpu();
-    W_in0->gpu();
-    W_ir1->gpu();
-    W_iz1->gpu();
-    W_in1->gpu();
+    // W_ir0->gpu();
+    // W_iz0->gpu();
+    // W_in0->gpu();
+    // W_ir1->gpu();
+    // W_iz1->gpu();
+    // W_in1->gpu();
 
-    W_hr0->gpu();
-    W_hz0->gpu();
-    W_hn0->gpu();
-    W_hr1->gpu();
-    W_hz1->gpu();
-    W_hn1->gpu();
+    // W_hr0->gpu();
+    // W_hz0->gpu();
+    // W_hn0->gpu();
+    // W_hr1->gpu();
+    // W_hz1->gpu();
+    // W_hn1->gpu();
 
-    b_ir0->gpu();
-    b_iz0->gpu();
-    b_in0->gpu();
-    b_ir1->gpu();
-    b_iz1->gpu();
-    b_in1->gpu();
+    // b_ir0->gpu();
+    // b_iz0->gpu();
+    // b_in0->gpu();
+    // b_ir1->gpu();
+    // b_iz1->gpu();
+    // b_in1->gpu();
 
-    b_hr0->gpu();
-    b_hz0->gpu();
-    b_hn0->gpu();
-    b_hr1->gpu();
-    b_hz1->gpu();
-    b_hn1->gpu();
+    // b_hr0->gpu();
+    // b_hz0->gpu();
+    // b_hn0->gpu();
+    // b_hr1->gpu();
+    // b_hz1->gpu();
+    // b_hn1->gpu();
 
-    W_fc->gpu();
-    b_fc->gpu();
+    // W_fc->gpu();
+    // b_fc->gpu();
 
-    /* input, activations, output, etc. */
+    // /* input, activations, output, etc. */
 
 
-    r0->gpu();
-    r1->gpu();
-    z0->gpu();
-    z1->gpu();
-    n0->gpu();
-    n1->gpu();
-    f->gpu();
+    // r0->gpu();
+    // r1->gpu();
+    // z0->gpu();
+    // z1->gpu();
+    // n0->gpu();
+    // n1->gpu();
+    // f->gpu();
 
-    rtmp00->gpu();
-    rtmp01->gpu();
-    rtmp02->gpu();
-    rtmp03->gpu();
-    rtmp04->gpu();
-    rtmp10->gpu();
-    rtmp11->gpu();
-    rtmp12->gpu();
-    rtmp13->gpu();
-    rtmp14->gpu();
+    // rtmp00->gpu();
+    // rtmp01->gpu();
+    // rtmp02->gpu();
+    // rtmp03->gpu();
+    // rtmp04->gpu();
+    // rtmp10->gpu();
+    // rtmp11->gpu();
+    // rtmp12->gpu();
+    // rtmp13->gpu();
+    // rtmp14->gpu();
 
-    ztmp00->gpu();
-    ztmp01->gpu();
-    ztmp02->gpu();
-    ztmp03->gpu();
-    ztmp04->gpu();
-    ztmp10->gpu();
-    ztmp11->gpu();
-    ztmp12->gpu();
-    ztmp13->gpu();
-    ztmp14->gpu();
+    // ztmp00->gpu();
+    // ztmp01->gpu();
+    // ztmp02->gpu();
+    // ztmp03->gpu();
+    // ztmp04->gpu();
+    // ztmp10->gpu();
+    // ztmp11->gpu();
+    // ztmp12->gpu();
+    // ztmp13->gpu();
+    // ztmp14->gpu();
 
-    ntmp00->gpu();
-    ntmp01->gpu();
-    ntmp02->gpu();
-    ntmp03->gpu();
-    ntmp04->gpu();
-    ntmp05->gpu();
-    ntmp10->gpu();
-    ntmp11->gpu();
-    ntmp12->gpu();
-    ntmp13->gpu();
-    ntmp14->gpu();
-    ntmp15->gpu();
+    // ntmp00->gpu();
+    // ntmp01->gpu();
+    // ntmp02->gpu();
+    // ntmp03->gpu();
+    // ntmp04->gpu();
+    // ntmp05->gpu();
+    // ntmp10->gpu();
+    // ntmp11->gpu();
+    // ntmp12->gpu();
+    // ntmp13->gpu();
+    // ntmp14->gpu();
+    // ntmp15->gpu();
 
-    htmp00->gpu();
-    htmp01->gpu();
-    htmp02->gpu();
-    htmp10->gpu();
-    htmp11->gpu();
-    htmp12->gpu();
+    // htmp00->gpu();
+    // htmp01->gpu();
+    // htmp02->gpu();
+    // htmp10->gpu();
+    // htmp11->gpu();
+    // htmp12->gpu();
 
-    ftmp0->gpu();
+    // ftmp0->gpu();
 
   } 
   else {
@@ -746,99 +749,164 @@ void namegen(int N, float *random_floats, char *output) {
 
   /* Generate N names */
   for (int n = 0; n < N; n++) {
-    input->buf[n] = SOS;
-  }
-  input->gpu();
+    /* Initialize input and hidden vector. */
+    /* One hidden vector for each GRU layer */
+    input->buf[0] = SOS;
+    hidden0->set_zero();
+    hidden1->set_zero();
 
-  hidden0->set_zero();
-  hidden1->set_zero();
-  hidden0->gpu();
-  hidden1->gpu();
+    for (int l = 0; l < MAX_LEN; l++) {
+      /* Embedding */
+      // embedding(input, character_embedding, emb_out);
 
-  for (int l = 0; l < MAX_LEN; l++) {
-    /* Embedding */
-    embeddingDevice(input, character_embedding, emb_out);
-    
-    matmulDevice(W_ir0, emb_out, rtmp00);
-    matmulDevice(W_hr0, hidden0, rtmp01);
+      input->gpu();
+      character_embedding->gpu();
+      emb_out->gpu();
 
-    elemwiseAddDevice(rtmp00, b_ir0, rtmp02);
-    elemwiseAddDevice(rtmp02, rtmp01, rtmp03);
-    elemwiseAddDevice(rtmp03, b_hr0, rtmp04);
-    elemwiseSigmoidDevice(rtmp04, r0);
+      W_ir0->gpu();
+      W_hr0->gpu();
+      W_iz0->gpu();
+      W_hz0->gpu();
 
-    /* First layer z */
-    matmulDevice(W_iz0, emb_out, ztmp00);
-    matmulDevice(W_hz0, hidden0, ztmp01);
-    elemwiseAddDevice(ztmp00, b_iz0, ztmp02);
-    elemwiseAddDevice(ztmp02, ztmp01, ztmp03);
-    elemwiseAddDevice(ztmp03, b_hz0, ztmp04);
-    elemwiseSigmoidDevice(ztmp04, z0);
+      r0->gpu();
+      z0->gpu();
+      b_ir0->gpu();
+      b_hr0->gpu();
+      b_iz0->gpu();
+      b_hz0->gpu();
 
-    /* First layer n */
-    matmulDevice(W_in0, emb_out, ntmp00);
-    elemwiseAddDevice(ntmp00, b_in0, ntmp01);
-    matmulDevice(W_hn0, hidden0, ntmp02);
+      rtmp00->gpu();
+      rtmp01->gpu();
+      rtmp02->gpu();
+      rtmp03->gpu();
+      rtmp04->gpu();
 
-    elemwiseAddDevice(ntmp02, b_hn0, ntmp03);
-    elemwiseMulDevice(r0, ntmp03, ntmp04);
-    elemwiseAddDevice(ntmp01, ntmp04, ntmp05);
-    elemwiseTanhDevice(ntmp05, n0);
+      ztmp00->gpu();
+      ztmp01->gpu();
+      ztmp02->gpu();
+      ztmp03->gpu();
+      ztmp04->gpu();
 
-    /* First layer h (hidden) */
-    elemwiseOneminusDevice(z0, htmp00);
-    elemwiseMulDevice(htmp00, n0, htmp01);
-    elemwiseMulDevice(z0, hidden0, htmp02);
-    elemwiseAddDevice(htmp01, htmp02, hidden0);
+      embeddingDevice(input, character_embedding, emb_out);
+      /* First layer r */
+      matmulDevice(W_ir0, emb_out, rtmp00);
+      matmulDevice(W_hr0, emb_out, rtmp01);
 
-    /* Second layer r */
-    matmulDevice(W_ir1, hidden0, rtmp10);
-    matmulDevice(W_hr1, hidden1, rtmp11);
+      elemwiseAddDevice(rtmp00, b_ir0, rtmp02);
+      elemwiseAddDevice(rtmp02, rtmp01, rtmp03);
+      elemwiseAddDevice(rtmp03, b_hr0, rtmp04);
+      elemwiseSigmoidDevice(rtmp04, r0);
 
-    elemwiseAddDevice(rtmp10, b_ir1, rtmp12);
-    elemwiseAddDevice(rtmp12, rtmp11, rtmp13);
-    elemwiseAddDevice(rtmp13, b_hr1, rtmp14);
-    elemwiseSigmoidDevice(rtmp14, r1);
 
-    /* Second layer z */
-    matmulDevice(W_iz1, hidden0, ztmp10);
-    matmulDevice(W_hz1, hidden1, ztmp11);
-    elemwiseAddDevice(ztmp10, b_iz1, ztmp12);
-    elemwiseAddDevice(ztmp12, ztmp11, ztmp13);
-    elemwiseAddDevice(ztmp13, b_hz1, ztmp14);
-    elemwiseSigmoidDevice(ztmp14, z1);
+      input->cpu();
+      character_embedding->cpu();
+      emb_out->cpu();
+      
+      W_ir0->cpu();
+      W_hr0->cpu();
+      W_iz0->cpu();
+      W_hz0->cpu();
+      
+      r0->cpu();
+      z0->cpu();
+      b_ir0->cpu();
+      b_hr0->cpu();
+      b_iz0->cpu();
+      b_hz0->cpu();
 
-    /* Second layer n */
-    matmulDevice(W_in1, hidden0, ntmp10);
-    elemwiseAddDevice(ntmp10, b_in1, ntmp11);
-    matmulDevice(W_hn1, hidden1, ntmp12);
-    elemwiseAddDevice(ntmp12, b_hn1, ntmp13);
-    elemwiseMulDevice(r1, ntmp13, ntmp14);
-    elemwiseAddDevice(ntmp11, ntmp14, ntmp15);
-    elemwiseTanhDevice(ntmp15, n1);
+      rtmp00->cpu();
+      rtmp01->cpu();
+      rtmp02->cpu();
+      rtmp03->cpu();
+      rtmp04->cpu();
 
-    /* Second layer h (hidden) */
-    elemwiseOneminusDevice(z1, htmp10);
-    elemwiseMulDevice(htmp10, n1, htmp11);
-    elemwiseMulDevice(z1, hidden1, htmp12);
-    elemwiseAddDevice(htmp11, htmp12, hidden1);
+      ztmp00->cpu();
+      ztmp01->cpu();
+      ztmp02->cpu();
+      ztmp03->cpu();
+      ztmp04->cpu();
 
-    /* Fully connected layer */
-    matmulDevice(W_fc, hidden1, ftmp0);
-    elemwiseAddDevice(ftmp0, b_fc, f);
+      // elemwiseSigmoidDevice(ztmp04, z0);
+      /* First layer z */
+      matvec(W_iz0, emb_out, ztmp00);
+      matvec(W_hz0, hidden0, ztmp01);
+      elemwise_add(ztmp00, b_iz0, ztmp02);
+      elemwise_add(ztmp02, ztmp01, ztmp03);
+      elemwise_add(ztmp03, b_hz0, ztmp04);
+      elemwise_sigmoid(ztmp04, z0);
 
-    /* Softmax */
-    softmaxDevice(f, char_prob);
+      /* First layer n */
+      matvec(W_in0, emb_out, ntmp00);
+      elemwise_add(ntmp00, b_in0, ntmp01);
+      matvec(W_hn0, hidden0, ntmp02);
+      elemwise_add(ntmp02, b_hn0, ntmp03);
+      elemwise_mul(r0, ntmp03, ntmp04);
+      elemwise_add(ntmp01, ntmp04, ntmp05);
+      elemwise_tanh(ntmp05, n0);
 
-    /* Random select */
-    int selected_char = random_select(char_prob, rfloats, n * MAX_LEN + l);
-    output[n * (MAX_LEN + 1) + l] = selected_char;
+      /* First layer h (hidden) */
+      elemwise_oneminus(z0, htmp00);
+      elemwise_mul(htmp00, n0, htmp01);
+      elemwise_mul(z0, hidden0, htmp02);
+      elemwise_add(htmp01, htmp02, hidden0);
 
-    input->cpu();
-    input->buf[0] = selected_char;
+      /* Second layer r */
+      matvec(W_ir1, hidden0, rtmp10);
+      matvec(W_hr1, hidden1, rtmp11);
+      elemwise_add(rtmp10, b_ir1, rtmp12);
+      elemwise_add(rtmp12, rtmp11, rtmp13);
+      elemwise_add(rtmp13, b_hr1, rtmp14);
+      elemwise_sigmoid(rtmp14, r1);
 
-    if (selected_char == EOS)
-      break;
+      /* Second layer z */
+      matvec(W_iz1, hidden0, ztmp10);
+      matvec(W_hz1, hidden1, ztmp11);
+      elemwise_add(ztmp10, b_iz1, ztmp12);
+      elemwise_add(ztmp12, ztmp11, ztmp13);
+      elemwise_add(ztmp13, b_hz1, ztmp14);
+      elemwise_sigmoid(ztmp14, z1);
+
+      /* Second layer n */
+      matvec(W_in1, hidden0, ntmp10);
+      elemwise_add(ntmp10, b_in1, ntmp11);
+      matvec(W_hn1, hidden1, ntmp12);
+      elemwise_add(ntmp12, b_hn1, ntmp13);
+      elemwise_mul(r1, ntmp13, ntmp14);
+      elemwise_add(ntmp11, ntmp14, ntmp15);
+      elemwise_tanh(ntmp15, n1);
+
+      /* Second layer h (hidden) */
+      elemwise_oneminus(z1, htmp10);
+      elemwise_mul(htmp10, n1, htmp11);
+      elemwise_mul(z1, hidden1, htmp12);
+      elemwise_add(htmp11, htmp12, hidden1);
+
+      /* Fully connected layer */
+      // printf("here?\n");
+      matvec(W_fc, hidden1, ftmp0); // ftmp0 : (BS * num_char)
+      // printf("or here?");
+      // W_fc->gpu();
+      // hidden1->gpu();
+      // ftmp0->gpu();
+      // b_fc->gpu();
+      // f->gpu();
+      elemwise_add(ftmp0, b_fc, f);
+      // W_fc->cpu();
+      // hidden1->cpu();
+      // ftmp0->cpu();
+      // b_fc->cpu();
+      // f->cpu();
+      /* Softmax */
+      softmax(f, char_prob);
+      /* Random select */
+      int selected_char = random_select(char_prob, rfloats, n * MAX_LEN + l);
+
+      output[n * (MAX_LEN + 1) + l] = selected_char;
+      input->buf[0] = selected_char;
+
+      if (selected_char == EOS)
+        break;
+    }
   }
 }
 
