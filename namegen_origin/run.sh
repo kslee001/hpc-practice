@@ -1,0 +1,1 @@
+./main model.bin output.txt 3 1203

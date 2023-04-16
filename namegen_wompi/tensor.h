@@ -8,6 +8,9 @@ struct Tensor{
     float* buf_cpu = nullptr;
     float* buf_gpu = nullptr;
     float* buf     = nullptr;
+    float* zero_vector = nullptr;
+
+    bool is_on_device = false;
 
     size_t ndim = 0;
     size_t shape[4];
@@ -22,6 +25,10 @@ struct Tensor{
         size_t n = num_elem();
         buf_cpu = (float *) malloc(n * sizeof(float));
         buf = buf_cpu;
+        zero_vector = (float * ) malloc(n *sizeof(float));
+        for(size_t i=0; i<n; ++i){
+            zero_vector[i] = 0.0f;
+        }
     }
 
     // copy
@@ -35,20 +42,31 @@ struct Tensor{
         buf_cpu = (float *)malloc(n * sizeof(float));
         memcpy(buf_cpu, buf_, n*sizeof(float));
         buf = buf_cpu;
+        zero_vector = (float * ) malloc(n *sizeof(float));
+        for(size_t i=0; i<n; ++i){
+            zero_vector[i] = 0.0f;
+        }
     }
 
 
     // desctruct
     ~Tensor(){
         if (buf_cpu != nullptr) free(buf_cpu);
-        if (buf_gpu != nullptr) free(buf_cpu);
-        // if (buf != nullptr) free(buf);
+        if (buf_gpu != nullptr) cudaFree(buf_cpu);
     }
 
     void set_zero(){
         size_t n = num_elem();
-        for (size_t i=0; i<n; ++i){
-            buf[i] = 0.0;
+        if (is_on_device==false){
+            for (size_t i=0; i<n; ++i){
+                buf[i] = 0.0;
+            }
+        }
+        else{
+            cudaMemcpy(buf, zero_vector,
+            sizeof(float)*num_elem(),
+            cudaMemcpyHostToDevice
+            );
         }
     }
 
@@ -61,43 +79,33 @@ struct Tensor{
     }
 
   void gpu(){
-    if (is_offloading()) return;
+    if (is_on_device==true) return;
     // allocate device memory 
     cudaMalloc(&buf_gpu, sizeof(float)*num_elem());
-
     // copy data from host into device memory
     cudaMemcpy(
         buf_gpu, buf_cpu, // gpu from cpu
         sizeof(float)*num_elem(), 
         cudaMemcpyHostToDevice
     );
-    
     // destruct host memory
-    free(buf_cpu); // 'buf' freed too !
     buf = buf_gpu; // change pointer direction
+    is_on_device = true;
   }
 
   void cpu(){
-    if (is_offloading()==false) return; // already in cpu memory
+    if (is_on_device==false) return; // already in cpu memory
     // allocate host memory
-    buf_cpu = (float *)malloc(sizeof(float)*num_elem());
-
     // copy data from device into host memory
     cudaMemcpy(
         buf_cpu, buf_gpu, // cpu from gpu
         sizeof(float)*num_elem(), 
         cudaMemcpyDeviceToHost
     );
-
-    free(buf_gpu); // destruct device memory
-    // free(buf);
+    cudaFree(buf_gpu); // destruct device memory
     // change buf direction
     buf = buf_cpu;
-  }
-
-  bool is_offloading(){
-    if (buf==buf_gpu) return true;
-    else              return false;
+    is_on_device = false;
   }
 
 };

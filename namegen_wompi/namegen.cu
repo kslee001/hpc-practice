@@ -10,8 +10,6 @@
 extern int mpi_rank, mpi_size;
 
 #define BLOCK_SIZE 32
-#define BS 1
-
 
 // cuda check
 #define CHECK_CUDA(f)                                                 \
@@ -29,25 +27,54 @@ dim3 grid_gen(Tensor* curTensor, int bs){
   return dim3( (curTensor->shape[0]+bs-1)/bs, (curTensor->shape[1]+bs-1)/bs );
 }
 
+void mg(Tensor *t1, Tensor *t2){
+  t1->gpu();
+  t2->gpu();
+}
+void mg(Tensor *t1, Tensor *t2, Tensor *t3){
+  t1->gpu();
+  t2->gpu();
+  t3->gpu();
+}
+void mc(Tensor *t1, Tensor *t2){
+  t1->cpu();
+  t2->cpu();
+}
+void mc(Tensor *t1, Tensor *t2, Tensor *t3){
+  t1->cpu();
+  t2->cpu();
+  t3->cpu();
+}
+
+
+void debug(Tensor* target){
+    target->cpu();
+    printf("\n");
+    for(int i=0; i<8; ++i) printf("cur f:  %.3lf ",target->buf[i]);
+    target->gpu();
+}
+
 /* Operations */
 
 bool offload_check(Tensor* T1){
-  if (T1->is_offloading()) return true;
+  if (T1->is_on_device==true) return true;
   else                     return false;
 }
 bool offload_check(Tensor* T1, Tensor* T2){
-  if (T1->is_offloading()
-  && T2->is_offloading()) return true;
+  if (T1->is_on_device==true
+  && T2->is_on_device==true) return true;
   else                     return false;
 }
 bool offload_check(Tensor* T1, Tensor* T2, Tensor* T3){
-  if (T1->is_offloading()
-  && T2->is_offloading()
-  && T3->is_offloading()) return true;
+  if (T1->is_on_device==true
+  && T2->is_on_device==true
+  && T3->is_on_device==true) return true;
   else                     return false;
 }
 
-// __global__ void embeddingKernel(Tensor *input, Tensor *weight, Tensor )
+
+
+/* Operations */
 
 /*
  * Embedding
@@ -55,87 +82,110 @@ bool offload_check(Tensor* T1, Tensor* T2, Tensor* T3){
  * weight: [NUM_CHAR x EMBEDDING_DIM]
  * output: [EMBEDDING_DIM]
  */
-__global__ 
+__global__
 void embeddingKernel(
-  float* input, 
-  float* character_embedding, 
-  float* emb_out){
-  int cur_row = blockIdx.y*blockDim.y + threadIdx.y;
-  int cur_col = blockIdx.x*blockDim.x + threadIdx.x;
-  int x = (int) input[cur_row]; // single character, 0-255
-  if (cur_row < BS && cur_col < EMBEDDING_DIM){
-      emb_out[cur_row*EMBEDDING_DIM + cur_col] = character_embedding[x*EMBEDDING_DIM + cur_col];
+  float* input,
+  float* weight,
+  float* output,
+  const int BS
+  ){
+  // BS == 1
+  if (BS == 1){
+    int cur_row = blockIdx.y*blockDim.y + threadIdx.y;
+    int cur_col = blockIdx.x*blockDim.x + threadIdx.x;
+    int x = (int) input[cur_row]; // single character, 0-255
+    if (cur_col < EMBEDDING_DIM){
+        output[cur_row*EMBEDDING_DIM + cur_col] 
+        = weight[x*EMBEDDING_DIM + cur_col];
+    }
+  }
+  // BS > 1
+  else{
+
   }
 }
 void embeddingDevice(
-  Tensor *input, 
-  Tensor *character_embedding, 
-  Tensor *emb_out) {
-  // 얘네는 dimension을 x, y 순으로 준다는 점에 주의할 것 !!
-  dim3 blockDim(BLOCK_SIZE, BS); // 한 블록에 쓰레드를 [0] x [1] 개 만든다.
-  dim3 gridDim((EMBEDDING_DIM+BLOCK_SIZE-1)/BLOCK_SIZE, BS);   // 한 grid에 블록을 [0] x [1] 개 만든다.
-
-  // kernel<<block개수, thread 개수>> -> kernel<<gridDim, blockDim>>
-  // CHECK_CUDA(
-  embeddingKernel<<<gridDim, blockDim>>>(
-    input->buf, character_embedding->buf, emb_out->buf
-  );
-  // );
-  cudaDeviceSynchronize();
-}
-void embedding(
-  Tensor *input,               // {BS, 1}
-  Tensor *character_embedding, // {BS, NUM_CHAR, EMBEDDING_DIM} 
-  Tensor *emb_out) {           // {BS, EMBEDDING_DIM}
-  
-  bool gpu_operation = offload_check(input, character_embedding, emb_out);
-  if (gpu_operation){
-    embeddingDevice(input, character_embedding, emb_out);
+  Tensor *input,
+  Tensor *weight,
+  Tensor *output,
+  const int BS
+){
+  // BS == 1
+  if (BS == 1){
+    dim3 blockDim(BLOCK_SIZE, 1);
+    dim3 gridDim((EMBEDDING_DIM+BLOCK_SIZE-1)/BLOCK_SIZE, 1);
+    embeddingKernel<<<gridDim, blockDim>>>
+    (input->buf, weight->buf, output->buf, BS);
+    cudaDeviceSynchronize();
   }
-  else{ // cpu operation
-    for (size_t i = 0; i < EMBEDDING_DIM; i++) {
+  // BS > 1
+  else{
+
+  }
+
+}
+void embedding(Tensor *input, Tensor *weight, Tensor *output) {
+  // gpu check
+  bool gpu_use = offload_check(input, weight, output);
+
+  // gpu
+  if (gpu_use){
+    // Batch size
+    int BS;
+    if (input->ndim == 1) 
+      BS = 1;
+    else 
+      BS = input->shape[0];
+    // call kernel
+    embeddingDevice(input, weight, output, BS);
+  
+  }
+
+  // cpu
+  else{
+    size_t n = weight->shape[1];
+    for (size_t i = 0; i < n; i++) {
       int x = (int)input->buf[0];
-      emb_out->buf[i] = character_embedding->buf[x*EMBEDDING_DIM + i];
+      output->buf[i] = weight->buf[x * n + i];
     }
   }
 }
+
 /*
  * Elementwise addition
  * input1: [*]
  * input2: [*] (same shape as input1)
  * output: [*] (same shape as input1)
  */
-__global__
-void elemwiseAddKernel(
-  float* input1, float* input2, float* output,
-  int Y, int X
-  ){
-    int y = blockIdx.y*blockDim.y + threadIdx.y;
-    int x = blockIdx.x*blockDim.x + threadIdx.x;
 
-    if (y < Y && x < X){
-      output[y*X + x] = input1[y*X + x] + input2[y*X + x];
-    }
+__global__ 
+void elemwiseAddKernel(float *input1, float *input2, float *output, size_t size) {
+  size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx < size) {
+    output[idx] = input1[idx] + input2[idx];
+  }
 }
 void elemwiseAddDevice(Tensor *input1, Tensor *input2, Tensor *output) {
-  // size_t sn = input1->num_elem();
-  // for (size_t i = 0; i < sn; i++) {
-  //   output->buf[i] = input1->buf[i] + input2->buf[i];
-  // }
-  const int Y = output->shape[0];
-  const int X = output->shape[1];
-  
-  dim3 blockDim(BLOCK_SIZE, BLOCK_SIZE);
-  dim3 gridDim((X+BLOCK_SIZE-1)/BLOCK_SIZE, (Y+BLOCK_SIZE-1)/BLOCK_SIZE);
-  elemwiseAddKernel<<<gridDim, blockDim>>>(
-    input1->buf, input2->buf, output->buf, Y, X
-  );
+  size_t size = input1->num_elem();
+  int num_blocks = (size + BLOCK_SIZE - 1) / BLOCK_SIZE;
+  elemwiseAddKernel<<<num_blocks, BLOCK_SIZE>>>
+  (input1->buf, input2->buf, output->buf, size);
   cudaDeviceSynchronize();
 }
+
 void elemwise_add(Tensor *input1, Tensor *input2, Tensor *output) {
-  size_t sn = input1->num_elem();
-  for (size_t i = 0; i < sn; i++) {
-    output->buf[i] = input1->buf[i] + input2->buf[i];
+  // gpu check
+  bool gpu_use = offload_check(input1, input2, output);
+  if (gpu_use){
+    // batch 고려하지 않음 -> 나중에 따로 만들기
+    elemwiseAddDevice(input1, input2, output);
+    
+  }
+  else{
+    size_t sn = input1->num_elem();
+    for (size_t i = 0; i < sn; i++) {
+      output->buf[i] = input1->buf[i] + input2->buf[i];
+    }
   }
 }
 
@@ -144,69 +194,67 @@ void elemwise_add(Tensor *input1, Tensor *input2, Tensor *output) {
  * input: [*]
  * output: [*] (same shape as input)
  */
-__global__ 
-void elemwiseOneminusKernel(
-  float* input, float* output,
-  int Y, int X
-){
-    int y = blockIdx.y*blockDim.y + threadIdx.y;
-    int x = blockIdx.x*blockDim.x + threadIdx.x;
 
-    if (y < Y && x < X){
-      output[y*X + x] = 1- input[y*X + x];
-    }
+__global__
+void elemwiseOneminusKernel(float *input, float* output, size_t size){
+  size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx < size) {
+    output[idx] = 1- input[idx];
+  }
 }
-void elemwiseOneminusDevice(Tensor *input, Tensor *output) {
-  const int Y = output->shape[0];
-  const int X = output->shape[1];
-  
-  dim3 blockDim(BLOCK_SIZE, BLOCK_SIZE);
-  dim3 gridDim((X+BLOCK_SIZE-1)/BLOCK_SIZE, (Y+BLOCK_SIZE-1)/BLOCK_SIZE);
-  elemwiseOneminusKernel<<<gridDim, blockDim>>>(
-    input->buf, output->buf, Y, X
-  );
+void elemwiseOneminusDevice(Tensor *input, Tensor *output){
+  size_t size = input->num_elem();
+  int num_blocks = (size + BLOCK_SIZE - 1) / BLOCK_SIZE;
+  elemwiseOneminusKernel<<<num_blocks, BLOCK_SIZE>>>
+  (input->buf, output->buf, size);
   cudaDeviceSynchronize();
 }
 void elemwise_oneminus(Tensor *input, Tensor *output) {
+  bool gpu_use = offload_check(input, output);
+  if (gpu_use){
+    elemwiseOneminusDevice(input, output);
+  }
+  else{
   size_t n = input->num_elem();
-  for (size_t i = 0; i < n; i++) {
-    float x = input->buf[i];
-    output->buf[i] = 1.0 - x;
+    for (size_t i = 0; i < n; i++) {
+      float x = input->buf[i];
+      output->buf[i] = 1.0 - x;
+    }
   }
 }
+
 /*
  * Elementwise multiplication
  * input1: [*]
  * input2: [*] (same shape as input1)
  * output: [*] (same shape as input1)
  */
-__global__
-void elemwiseMulKernel(
-  float* input1, float* input2, float* output,
-  int Y, int X
-  ){
-    int y = blockIdx.y*blockDim.y + threadIdx.y;
-    int x = blockIdx.x*blockDim.x + threadIdx.x;
-
-    if (y < Y && x < X){
-      output[y*X + x] = input1[y*X + x]*input2[y*X + x];
-    }
+__global__ 
+void elemwiseMulKernel(float *input1, float *input2, float *output, size_t size) {
+  size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx < size) {
+    output[idx] = input1[idx] * input2[idx];
+  }
 }
 void elemwiseMulDevice(Tensor *input1, Tensor *input2, Tensor *output) {
-  const int Y = output->shape[0];
-  const int X = output->shape[1];
-  
-  dim3 blockDim(BLOCK_SIZE, BLOCK_SIZE);
-  dim3 gridDim((X+BLOCK_SIZE-1)/BLOCK_SIZE, (Y+BLOCK_SIZE-1)/BLOCK_SIZE);
-  elemwiseMulKernel<<<gridDim, blockDim>>>(
-    input1->buf, input2->buf, output->buf, Y, X
-  );
+  size_t size = input1->num_elem();
+  int num_blocks = (size + BLOCK_SIZE - 1) / BLOCK_SIZE;
+  elemwiseMulKernel<<<num_blocks, BLOCK_SIZE>>>
+  (input1->buf, input2->buf, output->buf, size);
   cudaDeviceSynchronize();
 }
 void elemwise_mul(Tensor *input1, Tensor *input2, Tensor *output) {
-  size_t sn = input1->num_elem();
-  for (size_t i = 0; i < sn; i++) {
-    output->buf[i] = input1->buf[i] * input2->buf[i];
+  // gpu check
+  bool gpu_use = offload_check(input1, input2, output);
+  if (gpu_use){
+    // batch 고려하지 않음 -> 나중에 따로 만들기
+    elemwiseMulDevice(input1, input2, output);
+  }
+  else{
+    size_t sn = input1->num_elem();
+    for (size_t i = 0; i < sn; i++) {
+      output->buf[i] = input1->buf[i] * input2->buf[i];
+    }
   }
 }
 
@@ -217,86 +265,115 @@ void elemwise_mul(Tensor *input1, Tensor *input2, Tensor *output) {
  */
 
 __global__
-void elemwiseTanhKernel(
-  float* input, float* output,
-  int Y, int X
-  ){
-    int y = blockIdx.y*blockDim.y + threadIdx.y;
-    int x = blockIdx.x*blockDim.x + threadIdx.x;
-
-    if (y < Y && x < X){
-      output[y*X + x] = tanhf(input[y*X + x]);
-    }
+void elemwiseTanhKernel(float *input, float* output, size_t size){
+  size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx < size) {
+    output[idx] = tanhf(input[idx]);
+  }
 }
-void elemwiseTanhDevice(Tensor *input, Tensor *output) {
-  const int Y = output->shape[0];
-  const int X = output->shape[1];
-  
-  dim3 blockDim(BLOCK_SIZE, BLOCK_SIZE);
-  dim3 gridDim((X+BLOCK_SIZE-1)/BLOCK_SIZE, (Y+BLOCK_SIZE-1)/BLOCK_SIZE);
-  elemwiseTanhKernel<<<gridDim, blockDim>>>(
-    input->buf, output->buf, Y, X
-  );
+void elemwiseTanhDevice(Tensor *input, Tensor *output){
+  size_t size = input->num_elem();
+  int num_blocks = (size + BLOCK_SIZE - 1) / BLOCK_SIZE;
+  elemwiseTanhKernel<<<num_blocks, BLOCK_SIZE>>>
+  (input->buf, output->buf, size);
   cudaDeviceSynchronize();
 }
 void elemwise_tanh(Tensor *input, Tensor *output) {
+  bool gpu_use = offload_check(input, output);
+  if (gpu_use){
+    elemwiseTanhDevice(input, output);
+  }
+  else{
   size_t n = input->num_elem();
-  for (size_t i = 0; i < n; i++) {
-    float x = input->buf[i];
-    output->buf[i] = tanhf(x);
+    for (size_t i = 0; i < n; i++) {
+      float x = input->buf[i];
+      output->buf[i] = tanhf(x);
+    }
   }
 }
+
+
 /*
  * Elementwise Sigmoid 1 / (1 + exp(-x))
  * input: [*]
  * output: [*] (same shape as input)
  */
 __global__
-void elemwiseSigmoidKernel(
-  float* input, float* output,
-  int Y, int X
-  ){
-    int y = blockIdx.y*blockDim.y + threadIdx.y;
-    int x = blockIdx.x*blockDim.x + threadIdx.x;
-
-    if (y < Y && x < X){
-      float cur = input[y*X+x];
-      output[y*X + x] = 1.0/(1.0+ expf(-cur));
-    }
+void elemwiseSigmoidKernel(float *input, float* output, size_t size){
+  size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx < size) {
+    output[idx] = 1.0 / (1.0 + expf(-input[idx]));
+  }
 }
-void elemwiseSigmoidDevice(Tensor *input, Tensor *output) {
-  const int Y = output->shape[0];
-  const int X = output->shape[1];
-  
-  dim3 blockDim(BLOCK_SIZE, BLOCK_SIZE);
-  dim3 gridDim((X+BLOCK_SIZE-1)/BLOCK_SIZE, (Y+BLOCK_SIZE-1)/BLOCK_SIZE);
-  elemwiseSigmoidKernel<<<gridDim, blockDim>>>(
-    input->buf, output->buf, Y, X
-  );
+void elemwiseSigmoidDevice(Tensor *input, Tensor *output){
+  size_t size = input->num_elem();
+  int num_blocks = (size + BLOCK_SIZE - 1) / BLOCK_SIZE;
+  elemwiseSigmoidKernel<<<num_blocks, BLOCK_SIZE>>>
+  (input->buf, output->buf, size);
   cudaDeviceSynchronize();
 }
 void elemwise_sigmoid(Tensor *input, Tensor *output) {
-  size_t n = input->num_elem();
-  for (size_t i = 0; i < n; i++) {
-    float x = input->buf[i];
-    output->buf[i] = 1.0 / (1.0 + expf(-x));
+  bool gpu_use = offload_check(input, output);
+  if (gpu_use){
+    elemwiseSigmoidDevice(input, output);
+  }
+  else{
+    size_t n = input->num_elem();
+    for (size_t i = 0; i < n; i++) {
+      float x = input->buf[i];
+      output->buf[i] = 1.0 / (1.0 + expf(-x));
+    }
+
   }
 }
+
 /*
  * SGEMV
  * input1: [N x K]
  * input2: [K]
  * output: [N]
  */
-void matvec(Tensor *input1, Tensor *input2, Tensor *output) {
-  size_t N_ = input1->shape[1];
-  size_t K_ = input1->shape[2];
-  for (size_t i = 0; i < N_; i++) {
+__global__ void matvecKernel(
+  const float *input1, 
+  const float *input2, 
+  float *output, 
+  const size_t N_, 
+  const size_t K_) {
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < N_) {
     float c = 0.0;
     for (size_t j = 0; j < K_; j++) {
-      c += input1->buf[i * K_ + j] * input2->buf[j];
+      c += input1[i * K_ + j] * input2[j];
     }
-    output->buf[i] = c;
+    output[i] = c;
+  }
+}
+void matvecDevice(
+  Tensor *input1, 
+  Tensor *input2, 
+  Tensor *output) {
+  const size_t N_ = input1->shape[0];
+  const size_t K_ = input1->shape[1];
+  const int num_blocks = (N_ + BLOCK_SIZE - 1) / BLOCK_SIZE;
+  matvecKernel<<<num_blocks, BLOCK_SIZE>>>
+  (input1->buf, input2->buf, output->buf, N_, K_);
+  cudaDeviceSynchronize();
+}
+void matvec(Tensor *input1, Tensor *input2, Tensor *output) {
+  bool gpu_use = offload_check(input1, input2, output);
+  if (gpu_use){
+    matvecDevice(input1, input2, output);
+  }
+  else{
+    size_t N_ = input1->shape[0];
+    size_t K_ = input1->shape[1];
+    for (size_t i = 0; i < N_; i++) {
+      float c = 0.0;
+      for (size_t j = 0; j < K_; j++) {
+        c += input1->buf[i * K_ + j] * input2->buf[j];
+      }
+      output->buf[i] = c;
+    }
   }
 }
 
@@ -307,9 +384,9 @@ void matvec(Tensor *input1, Tensor *input2, Tensor *output) {
  * output: [M x N]
  */
 void matmul(Tensor *input1, Tensor *input2, Tensor *output) {
-  size_t M_ = input1->shape[1];
-  size_t K_ = input1->shape[2];
-  size_t N_ = input2->shape[2];
+  size_t M_ = input1->shape[0];
+  size_t K_ = input1->shape[1];
+  size_t N_ = input2->shape[1];
   for (size_t i = 0; i < M_; i++) {
     for (size_t j = 0; j < N_; j++) {
       float c = 0.0;
@@ -328,16 +405,46 @@ void matmul(Tensor *input1, Tensor *input2, Tensor *output) {
  * input: [*]
  * output: [*], (same shape as input)
  */
-void softmax(Tensor *input, Tensor *output) {
-  size_t n = input->num_elem();
+__global__ void softmaxKernel(
+  const float *input, 
+  float *output, 
+  const size_t n, 
+  const float sum) {
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < n) {
+    float x = input[i];
+    output[i] = expf(x) / sum;
+  }
+}
+void softmaxDevice(Tensor *input, Tensor *output) {
+  const size_t n = input->num_elem();
   float sum = 0.0;
   for (size_t i = 0; i < n; i++) {
     float x = input->buf[i];
     sum += expf(x);
   }
-  for (size_t i = 0; i < n; i++) {
-    float x = input->buf[i];
-    output->buf[i] = expf(x) / sum;
+  const int num_blocks = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
+  softmaxKernel<<<num_blocks, BLOCK_SIZE>>>
+  (input->buf, output->buf, n, sum);
+  cudaDeviceSynchronize();
+}
+
+void softmax(Tensor *input, Tensor *output) {
+  bool gpu_use = offload_check(input, output);
+  if(gpu_use){
+    softmaxDevice(input, output);
+  }
+  else{
+    size_t n = input->num_elem();
+    float sum = 0.0;
+    for (size_t i = 0; i < n; i++) {
+      float x = input->buf[i];
+      sum += expf(x);
+    }
+    for (size_t i = 0; i < n; i++) {
+      float x = input->buf[i];
+      output->buf[i] = expf(x) / sum;
+    }
   }
 }
 
@@ -360,7 +467,6 @@ int random_select(Tensor *input, Tensor *rng_seq, int rng_offset) {
   }
   return n - 1;
 }
-
 /*
  * Initialize the model.
  * Do input-independent job here.
@@ -375,195 +481,101 @@ void namegen_initialize(int N, int rng_seed, char *parameter_fname) {
 
     /* Network parameters */
     character_embedding =
-        new Tensor({BS, NUM_CHAR, EMBEDDING_DIM}, parameter + OFFSET0);
+        new Tensor({NUM_CHAR, EMBEDDING_DIM}, parameter + OFFSET0);
 
-    W_ir0 = new Tensor({BS, HIDDEN_DIM, EMBEDDING_DIM}, parameter + OFFSET1);
-    W_iz0 = new Tensor({BS, HIDDEN_DIM, EMBEDDING_DIM}, parameter + OFFSET2);
-    W_in0 = new Tensor({BS, HIDDEN_DIM, EMBEDDING_DIM}, parameter + OFFSET3);
-    W_ir1 = new Tensor({BS, HIDDEN_DIM, HIDDEN_DIM}, parameter + OFFSET4);
-    W_iz1 = new Tensor({BS, HIDDEN_DIM, HIDDEN_DIM}, parameter + OFFSET5);
-    W_in1 = new Tensor({BS, HIDDEN_DIM, HIDDEN_DIM}, parameter + OFFSET6);
+    W_ir0 = new Tensor({HIDDEN_DIM, EMBEDDING_DIM}, parameter + OFFSET1);
+    W_iz0 = new Tensor({HIDDEN_DIM, EMBEDDING_DIM}, parameter + OFFSET2);
+    W_in0 = new Tensor({HIDDEN_DIM, EMBEDDING_DIM}, parameter + OFFSET3);
+    W_ir1 = new Tensor({HIDDEN_DIM, HIDDEN_DIM}, parameter + OFFSET4);
+    W_iz1 = new Tensor({HIDDEN_DIM, HIDDEN_DIM}, parameter + OFFSET5);
+    W_in1 = new Tensor({HIDDEN_DIM, HIDDEN_DIM}, parameter + OFFSET6);
 
-    W_hr0 = new Tensor({BS, HIDDEN_DIM, HIDDEN_DIM}, parameter + OFFSET7);
-    W_hz0 = new Tensor({BS, HIDDEN_DIM, HIDDEN_DIM}, parameter + OFFSET8);
-    W_hn0 = new Tensor({BS, HIDDEN_DIM, HIDDEN_DIM}, parameter + OFFSET9);
-    W_hr1 = new Tensor({BS, HIDDEN_DIM, HIDDEN_DIM}, parameter + OFFSET10);
-    W_hz1 = new Tensor({BS, HIDDEN_DIM, HIDDEN_DIM}, parameter + OFFSET11);
-    W_hn1 = new Tensor({BS, HIDDEN_DIM, HIDDEN_DIM}, parameter + OFFSET12);
+    W_hr0 = new Tensor({HIDDEN_DIM, HIDDEN_DIM}, parameter + OFFSET7);
+    W_hz0 = new Tensor({HIDDEN_DIM, HIDDEN_DIM}, parameter + OFFSET8);
+    W_hn0 = new Tensor({HIDDEN_DIM, HIDDEN_DIM}, parameter + OFFSET9);
+    W_hr1 = new Tensor({HIDDEN_DIM, HIDDEN_DIM}, parameter + OFFSET10);
+    W_hz1 = new Tensor({HIDDEN_DIM, HIDDEN_DIM}, parameter + OFFSET11);
+    W_hn1 = new Tensor({HIDDEN_DIM, HIDDEN_DIM}, parameter + OFFSET12);
 
-    b_ir0 = new Tensor({BS, HIDDEN_DIM}, parameter + OFFSET13);
-    b_iz0 = new Tensor({BS, HIDDEN_DIM}, parameter + OFFSET14);
-    b_in0 = new Tensor({BS, HIDDEN_DIM}, parameter + OFFSET15);
-    b_ir1 = new Tensor({BS, HIDDEN_DIM}, parameter + OFFSET16);
-    b_iz1 = new Tensor({BS, HIDDEN_DIM}, parameter + OFFSET17);
-    b_in1 = new Tensor({BS, HIDDEN_DIM}, parameter + OFFSET18);
+    b_ir0 = new Tensor({HIDDEN_DIM}, parameter + OFFSET13);
+    b_iz0 = new Tensor({HIDDEN_DIM}, parameter + OFFSET14);
+    b_in0 = new Tensor({HIDDEN_DIM}, parameter + OFFSET15);
+    b_ir1 = new Tensor({HIDDEN_DIM}, parameter + OFFSET16);
+    b_iz1 = new Tensor({HIDDEN_DIM}, parameter + OFFSET17);
+    b_in1 = new Tensor({HIDDEN_DIM}, parameter + OFFSET18);
 
-    b_hr0 = new Tensor({BS, HIDDEN_DIM}, parameter + OFFSET19);
-    b_hz0 = new Tensor({BS, HIDDEN_DIM}, parameter + OFFSET20);
-    b_hn0 = new Tensor({BS, HIDDEN_DIM}, parameter + OFFSET21);
-    b_hr1 = new Tensor({BS, HIDDEN_DIM}, parameter + OFFSET22);
-    b_hz1 = new Tensor({BS, HIDDEN_DIM}, parameter + OFFSET23);
-    b_hn1 = new Tensor({BS, HIDDEN_DIM}, parameter + OFFSET24);
+    b_hr0 = new Tensor({HIDDEN_DIM}, parameter + OFFSET19);
+    b_hz0 = new Tensor({HIDDEN_DIM}, parameter + OFFSET20);
+    b_hn0 = new Tensor({HIDDEN_DIM}, parameter + OFFSET21);
+    b_hr1 = new Tensor({HIDDEN_DIM}, parameter + OFFSET22);
+    b_hz1 = new Tensor({HIDDEN_DIM}, parameter + OFFSET23);
+    b_hn1 = new Tensor({HIDDEN_DIM}, parameter + OFFSET24);
 
-    W_fc = new Tensor({BS, NUM_CHAR, HIDDEN_DIM}, parameter + OFFSET25);
-    b_fc = new Tensor({BS, NUM_CHAR}, parameter + OFFSET26);
+    W_fc = new Tensor({NUM_CHAR, HIDDEN_DIM}, parameter + OFFSET25);
+    b_fc = new Tensor({NUM_CHAR}, parameter + OFFSET26);
 
     /* input, activations, output, etc. */
-    input = new Tensor({BS, 1});
-    emb_out = new Tensor({BS, EMBEDDING_DIM});
+    input = new Tensor({1});
+    emb_out = new Tensor({EMBEDDING_DIM});
 
-    hidden0 = new Tensor({BS, HIDDEN_DIM});
-    hidden1 = new Tensor({BS, HIDDEN_DIM});
+    hidden0 = new Tensor({HIDDEN_DIM});
+    hidden1 = new Tensor({HIDDEN_DIM});
 
-    r0 = new Tensor({BS, HIDDEN_DIM});
-    r1 = new Tensor({BS, HIDDEN_DIM});
-    z0 = new Tensor({BS, HIDDEN_DIM});
-    z1 = new Tensor({BS, HIDDEN_DIM});
-    n0 = new Tensor({BS, HIDDEN_DIM});
-    n1 = new Tensor({BS, HIDDEN_DIM});
-    f = new Tensor({BS, NUM_CHAR});
+    r0 = new Tensor({HIDDEN_DIM});
+    r1 = new Tensor({HIDDEN_DIM});
+    z0 = new Tensor({HIDDEN_DIM});
+    z1 = new Tensor({HIDDEN_DIM});
+    n0 = new Tensor({HIDDEN_DIM});
+    n1 = new Tensor({HIDDEN_DIM});
+    f = new Tensor({NUM_CHAR});
 
-    rtmp00 = new Tensor({BS, HIDDEN_DIM});
-    rtmp01 = new Tensor({BS, HIDDEN_DIM});
-    rtmp02 = new Tensor({BS, HIDDEN_DIM});
-    rtmp03 = new Tensor({BS, HIDDEN_DIM});
-    rtmp04 = new Tensor({BS, HIDDEN_DIM});
-    rtmp10 = new Tensor({BS, HIDDEN_DIM});
-    rtmp11 = new Tensor({BS, HIDDEN_DIM});
-    rtmp12 = new Tensor({BS, HIDDEN_DIM});
-    rtmp13 = new Tensor({BS, HIDDEN_DIM});
-    rtmp14 = new Tensor({BS, HIDDEN_DIM});
+    rtmp00 = new Tensor({HIDDEN_DIM});
+    rtmp01 = new Tensor({HIDDEN_DIM});
+    rtmp02 = new Tensor({HIDDEN_DIM});
+    rtmp03 = new Tensor({HIDDEN_DIM});
+    rtmp04 = new Tensor({HIDDEN_DIM});
+    rtmp10 = new Tensor({HIDDEN_DIM});
+    rtmp11 = new Tensor({HIDDEN_DIM});
+    rtmp12 = new Tensor({HIDDEN_DIM});
+    rtmp13 = new Tensor({HIDDEN_DIM});
+    rtmp14 = new Tensor({HIDDEN_DIM});
 
-    ztmp00 = new Tensor({BS, HIDDEN_DIM});
-    ztmp01 = new Tensor({BS, HIDDEN_DIM});
-    ztmp02 = new Tensor({BS, HIDDEN_DIM});
-    ztmp03 = new Tensor({BS, HIDDEN_DIM});
-    ztmp04 = new Tensor({BS, HIDDEN_DIM});
-    ztmp10 = new Tensor({BS, HIDDEN_DIM});
-    ztmp11 = new Tensor({BS, HIDDEN_DIM});
-    ztmp12 = new Tensor({BS, HIDDEN_DIM});
-    ztmp13 = new Tensor({BS, HIDDEN_DIM});
-    ztmp14 = new Tensor({BS, HIDDEN_DIM});
+    ztmp00 = new Tensor({HIDDEN_DIM});
+    ztmp01 = new Tensor({HIDDEN_DIM});
+    ztmp02 = new Tensor({HIDDEN_DIM});
+    ztmp03 = new Tensor({HIDDEN_DIM});
+    ztmp04 = new Tensor({HIDDEN_DIM});
+    ztmp10 = new Tensor({HIDDEN_DIM});
+    ztmp11 = new Tensor({HIDDEN_DIM});
+    ztmp12 = new Tensor({HIDDEN_DIM});
+    ztmp13 = new Tensor({HIDDEN_DIM});
+    ztmp14 = new Tensor({HIDDEN_DIM});
 
-    ntmp00 = new Tensor({BS, HIDDEN_DIM});
-    ntmp01 = new Tensor({BS, HIDDEN_DIM});
-    ntmp02 = new Tensor({BS, HIDDEN_DIM});
-    ntmp03 = new Tensor({BS, HIDDEN_DIM});
-    ntmp04 = new Tensor({BS, HIDDEN_DIM});
-    ntmp05 = new Tensor({BS, HIDDEN_DIM});
-    ntmp10 = new Tensor({BS, HIDDEN_DIM});
-    ntmp11 = new Tensor({BS, HIDDEN_DIM});
-    ntmp12 = new Tensor({BS, HIDDEN_DIM});
-    ntmp13 = new Tensor({BS, HIDDEN_DIM});
-    ntmp14 = new Tensor({BS, HIDDEN_DIM});
-    ntmp15 = new Tensor({BS, HIDDEN_DIM});
+    ntmp00 = new Tensor({HIDDEN_DIM});
+    ntmp01 = new Tensor({HIDDEN_DIM});
+    ntmp02 = new Tensor({HIDDEN_DIM});
+    ntmp03 = new Tensor({HIDDEN_DIM});
+    ntmp04 = new Tensor({HIDDEN_DIM});
+    ntmp05 = new Tensor({HIDDEN_DIM});
+    ntmp10 = new Tensor({HIDDEN_DIM});
+    ntmp11 = new Tensor({HIDDEN_DIM});
+    ntmp12 = new Tensor({HIDDEN_DIM});
+    ntmp13 = new Tensor({HIDDEN_DIM});
+    ntmp14 = new Tensor({HIDDEN_DIM});
+    ntmp15 = new Tensor({HIDDEN_DIM});
 
-    htmp00 = new Tensor({BS, HIDDEN_DIM});
-    htmp01 = new Tensor({BS, HIDDEN_DIM});
-    htmp02 = new Tensor({BS, HIDDEN_DIM});
-    htmp10 = new Tensor({BS, HIDDEN_DIM});
-    htmp11 = new Tensor({BS, HIDDEN_DIM});
-    htmp12 = new Tensor({BS, HIDDEN_DIM});
+    htmp00 = new Tensor({HIDDEN_DIM});
+    htmp01 = new Tensor({HIDDEN_DIM});
+    htmp02 = new Tensor({HIDDEN_DIM});
+    htmp10 = new Tensor({HIDDEN_DIM});
+    htmp11 = new Tensor({HIDDEN_DIM});
+    htmp12 = new Tensor({HIDDEN_DIM});
 
-    rfloats = new Tensor({BS, N * MAX_LEN});
-    ftmp0 = new Tensor({BS, NUM_CHAR});
-    char_prob = new Tensor({BS, NUM_CHAR});
-
+    rfloats = new Tensor({N * MAX_LEN});
+    ftmp0 = new Tensor({NUM_CHAR});
+    char_prob = new Tensor({NUM_CHAR});
 
     /* to device */
-    // character_embedding->to_gpu();
-
-    // W_ir0->to_gpu();
-    // W_iz0->to_gpu();
-    // W_in0->to_gpu();
-    // W_ir1->to_gpu();
-    // W_iz1->to_gpu();
-    // W_in1->to_gpu();
-
-    // W_hr0->to_gpu();
-    // W_hz0->to_gpu();
-    // W_hn0->to_gpu();
-    // W_hr1->to_gpu();
-    // W_hz1->to_gpu();
-    // W_hn1->to_gpu();
-
-    // b_ir0->to_gpu();
-    // b_iz0->to_gpu();
-    // b_in0->to_gpu();
-    // b_ir1->to_gpu();
-    // b_iz1->to_gpu();
-    // b_in1->to_gpu();
-
-    // b_hr0->to_gpu();
-    // b_hz0->to_gpu();
-    // b_hn0->to_gpu();
-    // b_hr1->to_gpu();
-    // b_hz1->to_gpu();
-    // b_hn1->to_gpu();
-
-    // W_fc->to_gpu();
-    // b_fc->to_gpu();
-
-    // /* input, activations, output, etc. */
-    // input->to_gpu();
-    // emb_out->to_gpu();
-
-    // hidden0->to_gpu();
-    // hidden1->to_gpu();
-
-    // r0->to_gpu();
-    // r1->to_gpu();
-    // z0->to_gpu();
-    // z1->to_gpu();
-    // n0->to_gpu();
-    // n1->to_gpu();
-    // f->to_gpu();
-
-    // rtmp00->to_gpu();
-    // rtmp01->to_gpu();
-    // rtmp02->to_gpu();
-    // rtmp03->to_gpu();
-    // rtmp04->to_gpu();
-    // rtmp10->to_gpu();
-    // rtmp11->to_gpu();
-    // rtmp12->to_gpu();
-    // rtmp13->to_gpu();
-    // rtmp14->to_gpu();
-
-    // ztmp00->to_gpu();
-    // ztmp01->to_gpu();
-    // ztmp02->to_gpu();
-    // ztmp03->to_gpu();
-    // ztmp04->to_gpu();
-    // ztmp10->to_gpu();
-    // ztmp11->to_gpu();
-    // ztmp12->to_gpu();
-    // ztmp13->to_gpu();
-    // ztmp14->to_gpu();
-
-    // ntmp00->to_gpu();
-    // ntmp01->to_gpu();
-    // ntmp02->to_gpu();
-    // ntmp03->to_gpu();
-    // ntmp04->to_gpu();
-    // ntmp05->to_gpu();
-    // ntmp10->to_gpu();
-    // ntmp11->to_gpu();
-    // ntmp12->to_gpu();
-    // ntmp13->to_gpu();
-    // ntmp14->to_gpu();
-    // ntmp15->to_gpu();
-
-    // htmp00->to_gpu();
-    // htmp01->to_gpu();
-    // htmp02->to_gpu();
-    // htmp10->to_gpu();
-    // htmp11->to_gpu();
-    // htmp12->to_gpu();
-
-    // rfloats->to_gpu();
-    // ftmp0->to_gpu();
-    // char_prob->to_gpu();
 
   } 
   else {
@@ -596,19 +608,17 @@ void namegen(int N, float *random_floats, char *output) {
 
     for (int l = 0; l < MAX_LEN; l++) {
       /* Embedding */
-      input->gpu();
-      character_embedding->gpu();
-      emb_out->gpu();
-      printf("here?\n");
       embedding(input, character_embedding, emb_out);
-      printf("or here?\n");
-      input->cpu();
-      character_embedding->cpu();
-      emb_out->cpu();
 
       /* First layer r */
+      mg(W_ir0, emb_out, rtmp00);
+      mg(W_hr0, hidden0, rtmp01);
       matvec(W_ir0, emb_out, rtmp00);
       matvec(W_hr0, hidden0, rtmp01);
+      mc(W_ir0, emb_out, rtmp00);
+      mc(W_hr0, hidden0, rtmp01);
+
+
       elemwise_add(rtmp00, b_ir0, rtmp02);
       elemwise_add(rtmp02, rtmp01, rtmp03);
       elemwise_add(rtmp03, b_hr0, rtmp04);
@@ -620,14 +630,19 @@ void namegen(int N, float *random_floats, char *output) {
       elemwise_add(ztmp00, b_iz0, ztmp02);
       elemwise_add(ztmp02, ztmp01, ztmp03);
       elemwise_add(ztmp03, b_hz0, ztmp04);
+      mg(ztmp04, z0);
       elemwise_sigmoid(ztmp04, z0);
+      mc(ztmp04, z0);
 
       /* First layer n */
       matvec(W_in0, emb_out, ntmp00);
       elemwise_add(ntmp00, b_in0, ntmp01);
       matvec(W_hn0, hidden0, ntmp02);
       elemwise_add(ntmp02, b_hn0, ntmp03);
+      mg(r0, ntmp03, ntmp04);
       elemwise_mul(r0, ntmp03, ntmp04);
+      mc(r0, ntmp03, ntmp04);
+
       elemwise_add(ntmp01, ntmp04, ntmp05);
       elemwise_tanh(ntmp05, n0);
 
@@ -673,6 +688,8 @@ void namegen(int N, float *random_floats, char *output) {
       elemwise_add(ftmp0, b_fc, f);
 
       /* Softmax */
+
+      mc(f, char_prob);
       softmax(f, char_prob);
 
       /* Random select */
