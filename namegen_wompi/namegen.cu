@@ -27,6 +27,10 @@ dim3 grid_gen(Tensor* curTensor, int bs){
   return dim3( (curTensor->shape[0]+bs-1)/bs, (curTensor->shape[1]+bs-1)/bs );
 }
 
+
+void mg(Tensor *t1){
+  t1->gpu();
+}
 void mg(Tensor *t1, Tensor *t2){
   t1->gpu();
   t2->gpu();
@@ -35,6 +39,9 @@ void mg(Tensor *t1, Tensor *t2, Tensor *t3){
   t1->gpu();
   t2->gpu();
   t3->gpu();
+}
+void mc(Tensor *t1){
+  t1->cpu();
 }
 void mc(Tensor *t1, Tensor *t2){
   t1->cpu();
@@ -405,48 +412,71 @@ void matmul(Tensor *input1, Tensor *input2, Tensor *output) {
  * input: [*]
  * output: [*], (same shape as input)
  */
-__global__ void softmaxKernel(
-  const float *input, 
-  float *output, 
-  const size_t n, 
-  const float sum) {
-  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i < n) {
+
+
+__global__ void expSumKernel(
+  float* input, 
+  float* sum, 
+  size_t n) {
+    __shared__ float sdata[BLOCK_SIZE];
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+
     float x = input[i];
-    output[i] = expf(x) / sum;
-  }
-}
-void softmaxDevice(Tensor *input, Tensor *output) {
-  const size_t n = input->num_elem();
-  float sum = 0.0;
-  for (size_t i = 0; i < n; i++) {
-    float x = input->buf[i];
-    sum += expf(x);
-  }
-  const int num_blocks = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
-  softmaxKernel<<<num_blocks, BLOCK_SIZE>>>
-  (input->buf, output->buf, n, sum);
-  cudaDeviceSynchronize();
+    float exp_x = expf(x);
+
+    // Compute partial sum for each thread
+    sdata[threadIdx.x] = exp_x;
+    for (unsigned int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+        __syncthreads();
+        if (threadIdx.x < stride) {
+            float tmp = sdata[threadIdx.x + stride];
+            sdata[threadIdx.x] += tmp;
+        }
+    }
+
+    // Write final result to global memory
+    if (threadIdx.x == 0) {
+        float res = sdata[0];
+        for (unsigned int i = 1; i < blockDim.x; i++) {
+            res += sdata[i];
+        }
+        atomicAdd(sum, res);
+    }
 }
 
 void softmax(Tensor *input, Tensor *output) {
+  float sum = 0.0f;
+  size_t n = input->num_elem();
   bool gpu_use = offload_check(input, output);
   if(gpu_use){
-    softmaxDevice(input, output);
+    int num_blocks = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    float* d_sum;
+    cudaMalloc(&d_sum, sizeof(float));
+    cudaMemset(d_sum, 0, sizeof(float));
+    expSumKernel<<<num_blocks, BLOCK_SIZE>>>(input->buf, d_sum, n);
+    cudaDeviceSynchronize();
+
+    cudaMemcpy(&sum, d_sum, sizeof(float), cudaMemcpyDeviceToHost);
+    cudaFree(d_sum);
+    input->cpu();
+    output->cpu();
   }
   else{
-    size_t n = input->num_elem();
-    float sum = 0.0;
     for (size_t i = 0; i < n; i++) {
       float x = input->buf[i];
       sum += expf(x);
     }
-    for (size_t i = 0; i < n; i++) {
-      float x = input->buf[i];
-      output->buf[i] = expf(x) / sum;
-    }
+  }
+
+  // to host
+  for (size_t i = 0; i < n; i++) {
+    float x = input->buf[i];
+    output->buf[i] = expf(x) / sum;
   }
 }
+
+
 
 /*
  * Sample a random index according to the given probability distribution
@@ -576,6 +606,94 @@ void namegen_initialize(int N, int rng_seed, char *parameter_fname) {
     char_prob = new Tensor({NUM_CHAR});
 
     /* to device */
+    character_embedding->gpu();
+
+    W_ir0->gpu();
+    W_iz0->gpu();
+    W_in0->gpu();
+    W_ir1->gpu();
+    W_iz1->gpu();
+    W_in1->gpu();
+    W_hr0->gpu();
+    W_hz0->gpu();
+    W_hn0->gpu();
+    W_hr1->gpu();
+    W_hz1->gpu();
+    W_hn1->gpu();
+
+    b_ir0->gpu();
+    b_iz0->gpu();
+    b_in0->gpu();
+    b_ir1->gpu();
+    b_iz1->gpu();
+    b_in1->gpu();
+
+    b_hr0->gpu();
+    b_hz0->gpu();
+    b_hn0->gpu();
+    b_hr1->gpu();
+    b_hz1->gpu();
+    b_hn1->gpu();
+
+    W_fc->gpu();
+    b_fc->gpu();
+
+    emb_out->gpu();
+
+    hidden0->gpu();
+    hidden1->gpu();
+
+    r0->gpu();
+    r1->gpu();
+    z0->gpu();
+    z1->gpu();
+    n0->gpu();
+    n1->gpu();
+    f->gpu();
+
+    rtmp00->gpu();
+    rtmp01->gpu();
+    rtmp02->gpu();
+    rtmp03->gpu();
+    rtmp04->gpu();
+    rtmp10->gpu();
+    rtmp11->gpu();
+    rtmp12->gpu();
+    rtmp13->gpu();
+    rtmp14->gpu();
+
+    ztmp00->gpu();
+    ztmp01->gpu();
+    ztmp02->gpu();
+    ztmp03->gpu();
+    ztmp04->gpu();
+    ztmp10->gpu();
+    ztmp11->gpu();
+    ztmp12->gpu();
+    ztmp13->gpu();
+    ztmp14->gpu();
+
+    ntmp00->gpu();
+    ntmp01->gpu();
+    ntmp02->gpu();
+    ntmp03->gpu();
+    ntmp04->gpu();
+    ntmp05->gpu();
+    ntmp10->gpu();
+    ntmp11->gpu();
+    ntmp12->gpu();
+    ntmp13->gpu();
+    ntmp14->gpu();
+    ntmp15->gpu();
+
+    htmp00->gpu();
+    htmp01->gpu();
+    htmp02->gpu();
+    htmp10->gpu();
+    htmp11->gpu();
+    htmp12->gpu();
+
+    ftmp0->gpu();
 
   } 
   else {
@@ -598,6 +716,7 @@ void namegen(int N, float *random_floats, char *output) {
   memcpy(rfloats->buf, random_floats, N * MAX_LEN * sizeof(float));
   memset(output, 0, N * (MAX_LEN + 1) * sizeof(char));
 
+
   /* Generate N names */
   for (int n = 0; n < N; n++) {
     /* Initialize input and hidden vector. */
@@ -608,16 +727,12 @@ void namegen(int N, float *random_floats, char *output) {
 
     for (int l = 0; l < MAX_LEN; l++) {
       /* Embedding */
+      mg(input);
       embedding(input, character_embedding, emb_out);
 
       /* First layer r */
-      mg(W_ir0, emb_out, rtmp00);
-      mg(W_hr0, hidden0, rtmp01);
       matvec(W_ir0, emb_out, rtmp00);
       matvec(W_hr0, hidden0, rtmp01);
-      mc(W_ir0, emb_out, rtmp00);
-      mc(W_hr0, hidden0, rtmp01);
-
 
       elemwise_add(rtmp00, b_ir0, rtmp02);
       elemwise_add(rtmp02, rtmp01, rtmp03);
@@ -630,18 +745,14 @@ void namegen(int N, float *random_floats, char *output) {
       elemwise_add(ztmp00, b_iz0, ztmp02);
       elemwise_add(ztmp02, ztmp01, ztmp03);
       elemwise_add(ztmp03, b_hz0, ztmp04);
-      mg(ztmp04, z0);
       elemwise_sigmoid(ztmp04, z0);
-      mc(ztmp04, z0);
 
       /* First layer n */
       matvec(W_in0, emb_out, ntmp00);
       elemwise_add(ntmp00, b_in0, ntmp01);
       matvec(W_hn0, hidden0, ntmp02);
       elemwise_add(ntmp02, b_hn0, ntmp03);
-      mg(r0, ntmp03, ntmp04);
       elemwise_mul(r0, ntmp03, ntmp04);
-      mc(r0, ntmp03, ntmp04);
 
       elemwise_add(ntmp01, ntmp04, ntmp05);
       elemwise_tanh(ntmp05, n0);
@@ -689,12 +800,15 @@ void namegen(int N, float *random_floats, char *output) {
 
       /* Softmax */
 
-      mc(f, char_prob);
+      // mg(f, char_prob);
+      mc(f);
       softmax(f, char_prob);
+      mg(f);
 
       /* Random select */
       int selected_char = random_select(char_prob, rfloats, n * MAX_LEN + l);
 
+      mc(input);
       output[n * (MAX_LEN + 1) + l] = selected_char;
       input->buf[0] = selected_char;
 
