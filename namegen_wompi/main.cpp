@@ -1,7 +1,6 @@
 #include <cstdio>
 #include <cstdlib>
 // #include <mpi.h>
-#include <pthread.h>
 #include <chrono>
 #include <unistd.h>
 using namespace std::chrono;
